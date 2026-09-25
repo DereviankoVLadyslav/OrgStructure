@@ -1,0 +1,77 @@
+rules_version = '2';
+
+// Who can do what is stored in the document meta/access:
+//   { admins: [...emails], editors: [...emails], viewers: [...emails] }
+// admins  — edit the chart and manage access
+// editors — edit the chart
+// viewers — read only
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email_verified == true;
+    }
+    function me() { return request.auth.token.email.lower(); }
+    function accessPath() { return /databases/$(database)/documents/meta/access; }
+    function hasAccessDoc() { return exists(accessPath()); }
+    function acl() { return get(accessPath()).data; }
+
+    function isAdmin()  { return signedIn() && hasAccessDoc() && me() in acl().admins; }
+    function isEditor() { return isAdmin() || (signedIn() && hasAccessDoc() && me() in acl().editors); }
+    function isViewer() { return isEditor() || (signedIn() && hasAccessDoc() && me() in acl().viewers); }
+
+    function emailList(v) { return v is list && v.size() <= 500; }
+
+    match /meta/access {
+      allow read: if isViewer();
+      // The very first signed-in person creates the list and becomes its only admin.
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['admins', 'editors', 'viewers'])
+        && request.resource.data.admins == [me()]
+        && request.resource.data.editors == []
+        && request.resource.data.viewers == [];
+      // Admins manage the list but can never remove themselves (so the chart always has an admin).
+      allow update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['admins', 'editors', 'viewers'])
+        && emailList(request.resource.data.admins)
+        && emailList(request.resource.data.editors)
+        && emailList(request.resource.data.viewers)
+        && me() in request.resource.data.admins;
+      allow delete: if false;
+    }
+
+    match /meta/company {
+      allow read: if isViewer();
+      allow write: if isEditor()
+        && request.resource.data.keys().hasOnly(['name'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80;
+    }
+
+    function validPerson(id) {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['id', 'name', 'title', 'dept', 'role', 'managerId', 'updatedBy', 'updatedAt'])
+        && d.id == id
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+        && d.title is string && d.title.size() <= 120
+        && d.dept is string && d.dept.size() <= 60
+        && d.role in ['director', 'deputy', 'head', 'staff']
+        && (d.managerId == null || (d.managerId is string && d.managerId != id))
+        && d.updatedBy == me()
+        && d.updatedAt == request.time;
+    }
+
+    match /people/{id} {
+      allow read: if isViewer();
+      allow create, update: if isEditor() && validPerson(id);
+      allow delete: if isEditor();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
