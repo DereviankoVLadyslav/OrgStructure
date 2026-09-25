@@ -3,6 +3,7 @@ import type { User } from "firebase/auth";
 import { OrgTree } from "./components/OrgTree";
 import { PersonPanel, type Draft } from "./components/PersonPanel";
 import { AccessPanel } from "./components/AccessPanel";
+import { PersonPopover } from "./components/PersonPopover";
 import { DeniedGate, Gate, SetupGate, SignInGate } from "./components/Gates";
 import { buildIndex, kids, newId, parseOrgData, plural, type Person, type Role } from "./lib/org";
 import { isConfigured } from "./lib/firebase";
@@ -57,6 +58,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [side, setSide] = useState<"person" | "access" | null>(null);
+  const [popover, setPopover] = useState<{ id: string; anchor: DOMRect } | null>(null);
   const [query, setQuery] = useState("");
   const [zoom, setZoomState] = useState(1);
   const [toast, setToast] = useState<string | null>(null);
@@ -166,6 +168,16 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
     };
   }, []);
 
+  // The menu is anchored to a card; moving the chart would leave it floating in the wrong place.
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c || !popover) return;
+    const close = () => setPopover(null);
+    c.addEventListener("scroll", close, { passive: true });
+    return () => c.removeEventListener("scroll", close);
+  }, [popover]);
+  useEffect(() => setPopover(null), [zoom, collapsed, query]);
+
   useEffect(() => {
     if (!query) return;
     treeRef.current?.querySelector(".hit")?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
@@ -175,8 +187,12 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
   const openEdit = (id: string) => {
     const p = people.get(id);
     if (!p) return;
-    setDraft({ person: { id: p.id, name: p.name, title: p.title, dept: p.dept, role: p.role, managerId: index.parentOf.get(id) ?? null }, isNew: false });
+    setDraft({
+      person: { id: p.id, name: p.name, title: p.title, dept: p.dept, role: p.role, managerId: index.parentOf.get(id) ?? null, functions: [...p.functions] },
+      isNew: false,
+    });
     setSide("person");
+    setPopover(null);
   };
 
   const openNew = (managerId: string | null, role: Role = "staff") => {
@@ -189,13 +205,35 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
         return n;
       });
     }
-    setDraft({ person: { id: newId(), name: "", title: "", dept: m?.dept ?? "", role, managerId }, isNew: true });
+    setDraft({ person: { id: newId(), name: "", title: "", dept: m?.dept ?? "", role, managerId, functions: [] }, isNew: true });
     setSide("person");
+    setPopover(null);
   };
 
   const writeFailed = (e: unknown) => {
     const code = (e as { code?: string }).code;
     say(code === "permission-denied" ? "У вас немає прав на редагування." : "Не вдалося зберегти. Перевірте з'єднання.");
+  };
+
+  /** Clicking a card opens (or closes) its small menu. */
+  const openPopover = (id: string, el: HTMLElement) => {
+    if (popover?.id === id) return setPopover(null);
+    if (side === "person") {
+      setSide(null);
+      setDraft(null);
+    }
+    setPopover({ id, anchor: el.getBoundingClientRect() });
+  };
+  const closePopover = useCallback(() => setPopover(null), []);
+
+  const changeFunctions = async (id: string, next: string[]) => {
+    const p = people.get(id);
+    if (!p) return;
+    try {
+      await upsert({ id: p.id, name: p.name, title: p.title, dept: p.dept, role: p.role, managerId: p.managerId, functions: next });
+    } catch (e) {
+      writeFailed(e);
+    }
   };
 
   const onSave = async (p: Person, isNew: boolean) => {
@@ -236,7 +274,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
 
   /* ---------- import / export ---------- */
   const exportJson = () => {
-    const data = { company, people: (rows ?? []).map(({ id, name, title, dept, role, managerId }) => ({ id, name, title, dept, role, managerId })) };
+    const data = { company, people: (rows ?? []).map(({ id, name, title, dept, role, managerId, functions }) => ({ id, name, title, dept, role, managerId, functions })) };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -381,10 +419,10 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
               <OrgTree
                 index={index}
                 collapsed={collapsed}
-                selectedId={side === "person" ? (draft?.isNew ? draft.person.managerId : draft?.person.id ?? null) : null}
+                selectedId={popover?.id ?? (side === "person" ? (draft?.isNew ? draft.person.managerId : draft?.person.id ?? null) : null)}
                 query={query}
                 canEdit={canEdit}
-                onSelect={openEdit}
+                onSelect={openPopover}
                 onAdd={(id) => openNew(id)}
                 onToggle={toggle}
               />
@@ -414,6 +452,25 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
           <AccessPanel list={list} myEmail={myEmail} onClose={() => setSide(null)} onMessage={say} />
         )}
       </div>
+
+      {popover && people.get(popover.id) && (() => {
+        const p = people.get(popover.id)!;
+        const boss = index.parentOf.get(p.id);
+        return (
+          <PersonPopover
+            key={p.id}
+            person={p}
+            anchor={popover.anchor}
+            canEdit={canEdit}
+            managerName={boss ? people.get(boss)?.name : undefined}
+            reportsCount={kids(index, p.id).length}
+            onChangeFunctions={(next) => changeFunctions(p.id, next)}
+            onEdit={() => openEdit(p.id)}
+            onAddSub={() => openNew(p.id)}
+            onClose={closePopover}
+          />
+        );
+      })()}
 
       {(toast || error) && <div className="toast">{toast ?? error}</div>}
     </>

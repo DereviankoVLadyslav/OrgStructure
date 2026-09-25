@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { FunctionsEditor } from "./FunctionsEditor";
 import {
   ROLES,
   ROLE_ORDER,
@@ -126,6 +127,15 @@ export function PersonPanel({ draft, people, index, departments, onSave, onDelet
             ))}
           </div>
         </fieldset>
+        <div className="field">
+          <span>Функції</span>
+          <FunctionsEditor
+            idPrefix="panel-fn"
+            functions={form.functions}
+            canEdit={canEdit}
+            onChange={(next) => set("functions", next)}
+          />
+        </div>
         <label className="field">
           <span>Безпосередньо підпорядковується</span>
           <select value={form.managerId ?? ""} onChange={(e) => set("managerId", e.target.value || null)}>

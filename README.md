@@ -5,6 +5,7 @@
 
 - Кілька людей бачать і редагують **одну спільну схему**. Зміни з'являються в усіх приблизно за секунду.
 - Вхід через Google. Адміністратор сам вирішує, хто може лише переглядати, хто редагувати, а хто керувати доступом.
+- Клік по картці відкриває невелике меню з функціями (обов'язками) працівника — їх можна додавати, змінювати й видаляти.
 - На кожній картці видно, хто і коли змінював її останнім.
 - Є експорт у JSON (резервна копія) та імпорт.
 
@@ -80,7 +81,7 @@ npm run dev
 
 | Шлях у Firestore | Що зберігає |
 |---|---|
-| `people/{id}` | одна людина: `name`, `title`, `dept`, `role`, `managerId`, `updatedBy`, `updatedAt` |
+| `people/{id}` | одна людина: `name`, `title`, `dept`, `role`, `managerId`, `functions` (список обов'язків), `updatedBy`, `updatedAt` |
 | `meta/company` | `{ name }` — назва компанії |
 | `meta/access` | `{ admins: [], editors: [], viewers: [] }` — списки Google-адрес |
 
@@ -100,4 +101,6 @@ npm run dev
 - `src/components/OrgTree.tsx` — блок-схема
 - `src/components/PersonPanel.tsx` — картка редагування людини
 - `src/components/AccessPanel.tsx` — керування доступом
+- `src/components/PersonPopover.tsx` — меню, що відкривається по кліку на картку
+- `src/components/FunctionsEditor.tsx` — список функцій працівника
 - `public/org.json` — приклад структури для кнопки «Завантажити приклад»

@@ -7,7 +7,12 @@
       "title": "Генеральна директорка",
       "dept": "Дирекція",
       "role": "director",
-      "managerId": null
+      "managerId": null,
+      "functions": [
+        "Стратегія розвитку компанії",
+        "Затвердження бюджету",
+        "Представництво перед партнерами"
+      ]
     },
     {
       "id": "p2",
@@ -15,7 +20,8 @@
       "title": "Перший заступник генерального директора",
       "dept": "Дирекція",
       "role": "deputy",
-      "managerId": "p1"
+      "managerId": "p1",
+      "functions": []
     },
     {
       "id": "p3",
@@ -23,7 +29,8 @@
       "title": "Заступниця директора з фінансів",
       "dept": "Дирекція",
       "role": "deputy",
-      "managerId": "p1"
+      "managerId": "p1",
+      "functions": []
     },
     {
       "id": "p4",
@@ -31,7 +38,12 @@
       "title": "Начальник відділу логістики",
       "dept": "Логістика",
       "role": "head",
-      "managerId": "p2"
+      "managerId": "p2",
+      "functions": [
+        "Планування перевезень",
+        "Контроль складських залишків",
+        "Робота з перевізниками"
+      ]
     },
     {
       "id": "p9",
@@ -39,7 +51,8 @@
       "title": "Заступник начальника відділу логістики",
       "dept": "Логістика",
       "role": "deputy",
-      "managerId": "p4"
+      "managerId": "p4",
+      "functions": []
     },
     {
       "id": "p10",
@@ -47,7 +60,11 @@
       "title": "Диспетчерка",
       "dept": "Логістика",
       "role": "staff",
-      "managerId": "p9"
+      "managerId": "p9",
+      "functions": [
+        "Розподіл рейсів між водіями",
+        "Відстеження вантажів"
+      ]
     },
     {
       "id": "p11",
@@ -55,7 +72,8 @@
       "title": "Координатор перевезень",
       "dept": "Логістика",
       "role": "staff",
-      "managerId": "p9"
+      "managerId": "p9",
+      "functions": []
     },
     {
       "id": "p12",
@@ -63,7 +81,8 @@
       "title": "Спеціалістка з митного оформлення",
       "dept": "Логістика",
       "role": "staff",
-      "managerId": "p9"
+      "managerId": "p9",
+      "functions": []
     },
     {
       "id": "p13",
@@ -71,7 +90,8 @@
       "title": "Менеджер складу",
       "dept": "Логістика",
       "role": "staff",
-      "managerId": "p4"
+      "managerId": "p4",
+      "functions": []
     },
     {
       "id": "p5",
@@ -79,7 +99,12 @@
       "title": "Начальниця відділу продажу",
       "dept": "Продажі",
       "role": "head",
-      "managerId": "p2"
+      "managerId": "p2",
+      "functions": [
+        "План продажу на квартал",
+        "Ціноутворення",
+        "Звітність для дирекції"
+      ]
     },
     {
       "id": "p14",
@@ -87,7 +112,8 @@
       "title": "Заступниця начальниці відділу продажу",
       "dept": "Продажі",
       "role": "deputy",
-      "managerId": "p5"
+      "managerId": "p5",
+      "functions": []
     },
     {
       "id": "p15",
@@ -95,7 +121,8 @@
       "title": "Менеджер з продажу",
       "dept": "Продажі",
       "role": "staff",
-      "managerId": "p14"
+      "managerId": "p14",
+      "functions": []
     },
     {
       "id": "p16",
@@ -103,7 +130,8 @@
       "title": "Менеджерка з продажу",
       "dept": "Продажі",
       "role": "staff",
-      "managerId": "p14"
+      "managerId": "p14",
+      "functions": []
     },
     {
       "id": "p17",
@@ -111,7 +139,8 @@
       "title": "Менеджер з ключових клієнтів",
       "dept": "Продажі",
       "role": "staff",
-      "managerId": "p14"
+      "managerId": "p14",
+      "functions": []
     },
     {
       "id": "p6",
@@ -119,7 +148,8 @@
       "title": "Начальник фінансового відділу",
       "dept": "Фінанси",
       "role": "head",
-      "managerId": "p3"
+      "managerId": "p3",
+      "functions": []
     },
     {
       "id": "p18",
@@ -127,7 +157,12 @@
       "title": "Головна бухгалтерка",
       "dept": "Фінанси",
       "role": "staff",
-      "managerId": "p6"
+      "managerId": "p6",
+      "functions": [
+        "Ведення бухгалтерського обліку",
+        "Податкова звітність",
+        "Закриття місяця"
+      ]
     },
     {
       "id": "p19",
@@ -135,7 +170,8 @@
       "title": "Фінансовий аналітик",
       "dept": "Фінанси",
       "role": "staff",
-      "managerId": "p6"
+      "managerId": "p6",
+      "functions": []
     },
     {
       "id": "p20",
@@ -143,7 +179,8 @@
       "title": "Бухгалтерка",
       "dept": "Фінанси",
       "role": "staff",
-      "managerId": "p18"
+      "managerId": "p18",
+      "functions": []
     },
     {
       "id": "p7",
@@ -151,7 +188,8 @@
       "title": "Начальниця відділу кадрів",
       "dept": "Кадри",
       "role": "head",
-      "managerId": "p3"
+      "managerId": "p3",
+      "functions": []
     },
     {
       "id": "p21",
@@ -159,7 +197,8 @@
       "title": "HR-менеджерка",
       "dept": "Кадри",
       "role": "staff",
-      "managerId": "p7"
+      "managerId": "p7",
+      "functions": []
     },
     {
       "id": "p8",
@@ -167,7 +206,8 @@
       "title": "Начальник ІТ-відділу",
       "dept": "ІТ",
       "role": "head",
-      "managerId": "p1"
+      "managerId": "p1",
+      "functions": []
     },
     {
       "id": "p22",
@@ -175,7 +215,12 @@
       "title": "Системний адміністратор",
       "dept": "ІТ",
       "role": "staff",
-      "managerId": "p8"
+      "managerId": "p8",
+      "functions": [
+        "Підтримка робочих місць",
+        "Резервне копіювання",
+        "Доступи до систем"
+      ]
     },
     {
       "id": "p23",
@@ -183,7 +228,8 @@
       "title": "Розробник",
       "dept": "ІТ",
       "role": "staff",
-      "managerId": "p8"
+      "managerId": "p8",
+      "functions": []
     },
     {
       "id": "p24",
@@ -191,7 +237,8 @@
       "title": "Аналітикиня даних",
       "dept": "ІТ",
       "role": "staff",
-      "managerId": "p8"
+      "managerId": "p8",
+      "functions": []
     }
   ]
 }

@@ -10,7 +10,7 @@ import {
   type Timestamp,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import { isRole, type OrgData, type Person } from "./org";
+import { cleanFunctions, isRole, type OrgData, type Person } from "./org";
 
 export interface StoredPerson extends Person {
   updatedBy?: string;
@@ -27,6 +27,7 @@ function toPerson(id: string, d: Record<string, unknown>): StoredPerson {
     dept: typeof d.dept === "string" ? d.dept : "",
     role: isRole(d.role) ? d.role : "staff",
     managerId: typeof d.managerId === "string" ? d.managerId : null,
+    functions: cleanFunctions(d.functions),
     updatedBy: typeof d.updatedBy === "string" ? d.updatedBy : undefined,
     updatedAt: (d.updatedAt as Timestamp | undefined) ?? null,
   };
@@ -39,6 +40,7 @@ const clean = (p: Person) => ({
   dept: p.dept,
   role: p.role,
   managerId: p.managerId,
+  functions: cleanFunctions(p.functions),
 });
 
 /**

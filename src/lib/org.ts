@@ -7,6 +7,8 @@ export interface Person {
   dept: string;
   role: Role;
   managerId: string | null;
+  /** Duties / responsibilities of the person, in display order. */
+  functions: string[];
 }
 
 export interface OrgData {
@@ -129,7 +131,21 @@ export function parseOrgData(raw: unknown): OrgData {
       dept: typeof p.dept === "string" ? p.dept : "",
       role: isRole(p.role) ? p.role : "staff",
       managerId: typeof p.managerId === "string" ? p.managerId : null,
+      functions: cleanFunctions(p.functions),
     };
   });
   return { company: typeof obj.company === "string" ? obj.company : "Компанія", people };
+}
+
+export const MAX_FUNCTIONS = 50;
+export const MAX_FUNCTION_LENGTH = 200;
+
+/** Keeps only non-empty strings, trimmed and within the limits the database accepts. */
+export function cleanFunctions(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x): x is string => typeof x === "string")
+    .map((x) => x.trim().slice(0, MAX_FUNCTION_LENGTH))
+    .filter(Boolean)
+    .slice(0, MAX_FUNCTIONS);
 }

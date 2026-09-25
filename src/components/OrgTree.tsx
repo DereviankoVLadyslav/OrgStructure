@@ -1,12 +1,12 @@
 import type { CSSProperties } from "react";
-import { ROLES, deptColor, descendantCount, kids, type OrgIndex, type Person } from "../lib/org";
+import { ROLES, deptColor, descendantCount, kids, plural, type OrgIndex, type Person } from "../lib/org";
 
 interface Props {
   index: OrgIndex;
   collapsed: Set<string>;
   selectedId: string | null;
   query: string;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, el: HTMLElement) => void;
   onAdd: (managerId: string) => void;
   onToggle: (id: string) => void;
   canEdit: boolean;
@@ -49,12 +49,14 @@ function Node({ person: p, ...props }: Props & { person: Person }) {
           style={dc(p)}
           role="button"
           tabIndex={0}
+          data-person={p.id}
+          aria-haspopup="dialog"
           aria-label={`${p.name}, ${p.title}`}
-          onClick={() => onSelect(p.id)}
+          onClick={(e) => onSelect(p.id, e.currentTarget)}
           onKeyDown={(e) => {
             if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
               e.preventDefault();
-              onSelect(p.id);
+              onSelect(p.id, e.currentTarget);
             }
           }}
         >
@@ -64,7 +66,14 @@ function Node({ person: p, ...props }: Props & { person: Person }) {
           </div>
           <div className="name">{p.name}</div>
           {p.title && <div className="title">{p.title}</div>}
-          <span className="badge">{ROLES[p.role].label}</span>
+          <div className="card-foot">
+            <span className="badge">{ROLES[p.role].label}</span>
+            {p.functions.length > 0 && (
+              <span className="fn-count" title={p.functions.join("\n")}>
+                {p.functions.length} {plural(p.functions.length, "функція", "функції", "функцій")}
+              </span>
+            )}
+          </div>
           {canEdit && (
           <button
             className="add"
@@ -105,12 +114,17 @@ function Node({ person: p, ...props }: Props & { person: Person }) {
                       "mini" + (c.id === selectedId ? " selected" : "") + (matches(c, query) ? " hit" : "")
                     }
                     style={dc(c)}
-                    onClick={() => onSelect(c.id)}
+                    data-person={c.id}
+                    aria-haspopup="dialog"
+                    onClick={(e) => onSelect(c.id, e.currentTarget)}
                   >
                     <i />
                     <span>
                       <b>{c.name}</b>
-                      <small>{c.title || ROLES[c.role].label}</small>
+                      <small>
+                        {c.title || ROLES[c.role].label}
+                        {c.functions.length > 0 && ` · ${c.functions.length} ${plural(c.functions.length, "функція", "функції", "функцій")}`}
+                      </small>
                     </span>
                   </button>
                 ))}
