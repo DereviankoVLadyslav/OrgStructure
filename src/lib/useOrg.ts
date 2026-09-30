@@ -11,7 +11,7 @@ import {
   type Timestamp,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import { cleanArea, cleanCoord, cleanFunctions, isRole, type Area, type OrgData, type Person } from "./org";
+import { cleanArea, cleanCoord, cleanFunctions, cleanIds, isRole, type Area, type OrgData, type Person } from "./org";
 
 export interface StoredPerson extends Person {
   updatedBy?: string;
@@ -28,6 +28,7 @@ function toPerson(id: string, d: Record<string, unknown>): StoredPerson {
     dept: typeof d.dept === "string" ? d.dept : "",
     role: isRole(d.role) ? d.role : "staff",
     managerId: typeof d.managerId === "string" ? d.managerId : null,
+    alsoReportsTo: cleanIds(d.alsoReportsTo),
     functions: cleanFunctions(d.functions),
     x: cleanCoord(d.x),
     y: cleanCoord(d.y),
@@ -43,6 +44,7 @@ const clean = (p: Person) => ({
   dept: p.dept,
   role: p.role,
   managerId: p.managerId,
+  alsoReportsTo: cleanIds(p.alsoReportsTo).filter((m) => m !== p.id && m !== p.managerId),
   functions: cleanFunctions(p.functions),
   x: cleanCoord(p.x),
   y: cleanCoord(p.y),
@@ -109,10 +111,10 @@ export function useOrg(enabled: boolean, editorEmail: string) {
 
   /** Removes a person; their direct reports move up to the removed person's manager. One atomic batch. */
   const remove = useCallback(
-    async (id: string, newManager: string | null, directReports: Person[]) => {
+    async (id: string, updated: Person[]) => {
       if (!db) return;
       const batch = writeBatch(db);
-      for (const c of directReports) batch.set(doc(db, "people", c.id), { ...clean({ ...c, managerId: newManager }), ...stamp() });
+      for (const c of updated) batch.set(doc(db, "people", c.id), { ...clean(c), ...stamp() });
       batch.delete(doc(db, "people", id));
       await batch.commit();
     },

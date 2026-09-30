@@ -54,7 +54,7 @@ export function PersonPopover({ person, anchor, canEdit, managerName, reportsCou
       </div>
 
       <dl className="pop-facts">
-        <div><dt>Керівник</dt><dd>{managerName ?? "—"}</dd></div>
+        <div><dt>Керівник{managerName?.includes(",") ? "и" : ""}</dt><dd>{managerName ?? "—"}</dd></div>
         <div><dt>Підлеглих</dt><dd>{reportsCount}</dd></div>
       </dl>
 

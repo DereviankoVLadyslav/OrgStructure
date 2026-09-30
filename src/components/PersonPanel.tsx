@@ -4,9 +4,9 @@ import {
   ROLES,
   ROLE_ORDER,
   ancestors,
-  descendants,
-  kids,
   plural,
+  reportsOf,
+  wouldCycle,
   type OrgIndex,
   type Person,
   type Role,
@@ -41,15 +41,14 @@ export function PersonPanel({ draft, people, index, departments, onSave, onDelet
 
   const id = draft.person.id;
   const managerChoices = useMemo(() => {
-    const excluded = draft.isNew ? new Set<string>() : descendants(index, id);
-    excluded.add(id);
+    // Anyone except the person themselves and people who (directly or not) report to them.
     return [...people.values()]
-      .filter((p) => !excluded.has(p.id))
+      .filter((p) => p.id !== id && (draft.isNew || !wouldCycle(p.id, id, people)))
       .sort((a, b) => ROLES[a.role].rank - ROLES[b.role].rank || a.name.localeCompare(b.name, "uk"));
   }, [people, index, id, draft.isNew]);
 
   const chain = draft.isNew ? [] : ancestors(index, id);
-  const reports = draft.isNew ? [] : kids(index, id);
+  const reports = draft.isNew ? [] : reportsOf(id, people);
   const boss = index.parentOf.get(id) ?? null;
   const manager = draft.person.managerId ? people.get(draft.person.managerId) : undefined;
 
@@ -137,8 +136,14 @@ export function PersonPanel({ draft, people, index, departments, onSave, onDelet
           />
         </div>
         <label className="field">
-          <span>Безпосередньо підпорядковується</span>
-          <select value={form.managerId ?? ""} onChange={(e) => set("managerId", e.target.value || null)}>
+          <span>Основний керівник</span>
+          <select
+            value={form.managerId ?? ""}
+            onChange={(e) => {
+              const v = e.target.value || null;
+              setForm((f) => ({ ...f, managerId: v, alsoReportsTo: f.alsoReportsTo.filter((m) => m !== v) }));
+            }}
+          >
             <option value="">— нікому (верхній рівень) —</option>
             {managerChoices.map((p) => (
               <option key={p.id} value={p.id}>
@@ -149,6 +154,52 @@ export function PersonPanel({ draft, people, index, departments, onSave, onDelet
           </select>
         </label>
 
+        <div className="field">
+          <span>Також підпорядковується</span>
+          {form.alsoReportsTo.filter((m) => people.has(m)).length > 0 ? (
+            <ul className="mgr-list">
+              {form.alsoReportsTo
+                .filter((m) => people.has(m))
+                .map((m) => (
+                  <li key={m}>
+                    <span>{people.get(m)!.name}</span>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        className="fn-del"
+                        aria-label={`Прибрати підпорядкування ${people.get(m)!.name}`}
+                        onClick={() => set("alsoReportsTo", form.alsoReportsTo.filter((x) => x !== m))}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </li>
+                ))}
+            </ul>
+          ) : (
+            <p className="fn-empty">
+              {canEdit ? "Лише основному керівнику. Додайте ще одного нижче або протягніть лінію від картки керівника." : "Лише основному керівнику."}
+            </p>
+          )}
+          {canEdit && (
+            <select
+              id="panel-extra-manager"
+              value=""
+              aria-label="Додати ще одного керівника"
+              onChange={(e) => e.target.value && set("alsoReportsTo", [...form.alsoReportsTo, e.target.value])}
+            >
+              <option value="">+ додати керівника…</option>
+              {managerChoices
+                .filter((p) => p.id !== form.managerId && !form.alsoReportsTo.includes(p.id))
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                    {p.title ? ` — ${p.title}` : ""}
+                  </option>
+                ))}
+            </select>
+          )}
+        </div>
         </fieldset>
         {canEdit && (
         <div className="actions">

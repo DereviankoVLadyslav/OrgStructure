@@ -90,7 +90,7 @@ export function freeSpot(managerBox: Box | null, taken: Box[], m: Metrics): Pt {
  * Reports below the manager share one horizontal "bus" (like a classic org chart);
  * reports beside or above get their own elbow line.
  */
-export function connectorPaths(parent: Box, children: Box[]): string[] {
+export function connectorPaths(parent: Box, children: Box[], drop = 22): string[] {
   const out: string[] = [];
   const px = parent.x + parent.w / 2;
   const pBottom = parent.y + parent.h;
@@ -99,7 +99,7 @@ export function connectorPaths(parent: Box, children: Box[]): string[] {
 
   if (below.length) {
     const minTop = Math.min(...below.map((c) => c.y));
-    const busY = Math.round(pBottom + Math.min(22, (minTop - pBottom) / 2));
+    const busY = Math.round(pBottom + Math.min(drop, (minTop - pBottom) / 2));
     const xs = below.map((c) => c.x + c.w / 2);
     const lo = Math.min(px, ...xs);
     const hi = Math.max(px, ...xs);

@@ -6,7 +6,7 @@ import { PersonPanel, type Draft } from "./components/PersonPanel";
 import { AccessPanel } from "./components/AccessPanel";
 import { PersonPopover } from "./components/PersonPopover";
 import { DeniedGate, Gate, SetupGate, SignInGate } from "./components/Gates";
-import { buildIndex, kids, newId, parseOrgData, plural, type Area, type Person, type Role } from "./lib/org";
+import { buildIndex, kids, managersOf, newId, parseOrgData, plural, reportsOf, wouldCycle, type Area, type Person, type Role } from "./lib/org";
 import { COMPACT, NORMAL, PAD, autoLayout, freeSpot, type Pt } from "./lib/layout";
 import type { Move } from "./lib/useOrg";
 import { isConfigured } from "./lib/firebase";
@@ -220,7 +220,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
     const p = people.get(id);
     if (!p) return;
     setDraft({
-      person: { id: p.id, name: p.name, title: p.title, dept: p.dept, role: p.role, managerId: index.parentOf.get(id) ?? null, functions: [...p.functions], x: p.x, y: p.y },
+      person: { id: p.id, name: p.name, title: p.title, dept: p.dept, role: p.role, managerId: index.parentOf.get(id) ?? null, alsoReportsTo: [...p.alsoReportsTo], functions: [...p.functions], x: p.x, y: p.y },
       isNew: false,
     });
     setSide("person");
@@ -245,7 +245,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
       spot = freeSpot(mp ? { ...mp, w: metrics.w, h: metrics.h } : null, taken, metrics);
     }
     setDraft({
-      person: { id: newId(), name: "", title: "", dept: m?.dept ?? "", role, managerId, functions: [], x: spot?.x ?? null, y: spot?.y ?? null },
+      person: { id: newId(), name: "", title: "", dept: m?.dept ?? "", role, managerId, alsoReportsTo: [], functions: [], x: spot?.x ?? null, y: spot?.y ?? null },
       isNew: true,
     });
     setSide("person");
@@ -344,6 +344,26 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
     setAreaPop((cur) => (cur?.id === id ? null : { id, anchor: el.getBoundingClientRect() }));
   };
 
+  /** A line dragged from one card to another: `subId` starts reporting to `managerId`. */
+  const onLink = async (managerId: string, subId: string) => {
+    const sub = people.get(subId);
+    const boss = people.get(managerId);
+    if (!sub || !boss) return;
+    if (managersOf(sub, people).includes(managerId)) return say(`${sub.name} вже підпорядковується ${boss.name}.`);
+    if (wouldCycle(managerId, subId, people))
+      return say(`Не можна: ${boss.name} сам(а) підпорядковується ${sub.name}, вийде замкнене коло.`);
+    const next: Person = sub.managerId && people.has(sub.managerId)
+      ? { ...sub, alsoReportsTo: [...sub.alsoReportsTo.filter((m) => m !== managerId), managerId] }
+      : { ...sub, managerId, alsoReportsTo: sub.alsoReportsTo.filter((m) => m !== managerId) };
+    try {
+      const pending = upsert(next);
+      say(next.managerId === managerId ? `${sub.name} тепер підпорядковується ${boss.name}` : `${sub.name} тепер також підпорядковується ${boss.name}`);
+      await pending;
+    } catch (e) {
+      writeFailed(e);
+    }
+  };
+
   const onSave = async (p: Person, isNew: boolean) => {
     try {
       const pending = upsert(p);
@@ -357,7 +377,16 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
 
   const onDelete = async (id: string) => {
     try {
-      const pending = remove(id, index.parentOf.get(id) ?? null, kids(index, id));
+      // Direct reports move up to the removed person's main manager; extra links to them disappear.
+      const up = index.parentOf.get(id) ?? null;
+      const updated: Person[] = [];
+      for (const q of people.values()) {
+        if (q.id === id) continue;
+        const main = q.managerId === id ? up : q.managerId;
+        const extra = q.alsoReportsTo.filter((m) => m !== id && m !== main);
+        if (main !== q.managerId || extra.length !== q.alsoReportsTo.length) updated.push({ ...q, managerId: main, alsoReportsTo: extra });
+      }
+      const pending = remove(id, updated);
       setDraft(null);
       setSide(null);
       say("Видалено");
@@ -385,7 +414,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
     const data = {
       company,
       compact,
-      people: (rows ?? []).map(({ id, name, title, dept, role, managerId, functions, x, y }) => ({ id, name, title, dept, role, managerId, functions, x, y })),
+      people: (rows ?? []).map(({ id, name, title, dept, role, managerId, alsoReportsTo, functions, x, y }) => ({ id, name, title, dept, role, managerId, alsoReportsTo, functions, x, y })),
       areas,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -492,6 +521,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
         <span><i className="sw head" />Начальник підрозділу</span>
         <span><i className="sw deputy" />Заступник</span>
         <span><i className="sw" />Співробітник</span>
+        <span><i className="sw extra-line" />Додаткове підпорядкування</span>
         <span className="canvas-tools">
           <button
             type="button"
@@ -517,7 +547,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
                   <button type="button" className="chip" onClick={() => setConfirmArrange(true)}>Авторозміщення</button>
                 )
               )}
-              <span className="hint">Тягніть картку мишею · з Shift — разом з підлеглими · киньте на іншу картку, щоб поміняти місцями</span>
+              <span className="hint">Тягніть картку мишею · з Shift — разом з підлеглими · киньте на іншу картку, щоб поміняти місцями · точку справа на картці протягніть до підлеглого, щоб додати підпорядкування</span>
             </>
           )}
         </span>
@@ -579,6 +609,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
               }}
               onAreaSelect={openAreaPop}
               onAreaChange={saveArea}
+              onLink={onLink}
             />
           )}
         </div>
@@ -608,15 +639,15 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
 
       {popover && people.get(popover.id) && (() => {
         const p = people.get(popover.id)!;
-        const boss = index.parentOf.get(p.id);
+        const bosses = managersOf(p, people);
         return (
           <PersonPopover
             key={p.id}
             person={p}
             anchor={popover.anchor}
             canEdit={canEdit}
-            managerName={boss ? people.get(boss)?.name : undefined}
-            reportsCount={kids(index, p.id).length}
+            managerName={bosses.length ? bosses.map((b) => people.get(b)?.name).join(", ") : undefined}
+            reportsCount={reportsOf(p.id, people).length}
             onChangeFunctions={(next) => changeFunctions(p.id, next)}
             onEdit={() => openEdit(p.id)}
             onAddSub={() => openNew(p.id)}

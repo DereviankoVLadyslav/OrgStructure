@@ -7,6 +7,8 @@ export interface Person {
   dept: string;
   role: Role;
   managerId: string | null;
+  /** Additional managers the person also reports to (the main one is managerId). */
+  alsoReportsTo: string[];
   /** Duties / responsibilities of the person, in display order. */
   functions: string[];
   /** Position on the canvas (top-left corner). null = placed automatically. */
@@ -151,6 +153,7 @@ export function parseOrgData(raw: unknown): OrgData {
       dept: typeof p.dept === "string" ? p.dept : "",
       role: isRole(p.role) ? p.role : "staff",
       managerId: typeof p.managerId === "string" ? p.managerId : null,
+      alsoReportsTo: cleanIds(p.alsoReportsTo),
       functions: cleanFunctions(p.functions),
       x: cleanCoord(p.x),
       y: cleanCoord(p.y),
@@ -201,4 +204,43 @@ export function cleanArea(v: unknown): Area | null {
     shape: a.shape === "ellipse" ? "ellipse" : "rect",
     tone: a.tone === "strong" ? "strong" : "soft",
   };
+}
+
+export const MAX_EXTRA_MANAGERS = 20;
+
+export function cleanIds(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return [...new Set(v.filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 100))].slice(0, MAX_EXTRA_MANAGERS);
+}
+
+/** Every manager of a person that still exists: the main one first, then the additional ones. */
+export function managersOf(p: Person, people: Map<string, Person>): string[] {
+  const out: string[] = [];
+  if (p.managerId && p.managerId !== p.id && people.has(p.managerId)) out.push(p.managerId);
+  for (const m of p.alsoReportsTo) if (m !== p.id && people.has(m) && !out.includes(m)) out.push(m);
+  return out;
+}
+
+/** Direct reports of a manager, counting both main and additional reporting lines. */
+export function reportsOf(id: string, people: Map<string, Person>): Person[] {
+  return [...people.values()].filter((p) => managersOf(p, people).includes(id));
+}
+
+/**
+ * True when making `subId` report to `managerId` would create a loop
+ * (the manager already reports, directly or indirectly, to that person).
+ */
+export function wouldCycle(managerId: string, subId: string, people: Map<string, Person>): boolean {
+  if (managerId === subId) return true;
+  const seen = new Set<string>();
+  const stack = [managerId];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    if (cur === subId) return true;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    const p = people.get(cur);
+    if (p) stack.push(...managersOf(p, people));
+  }
+  return false;
 }

@@ -54,13 +54,14 @@ service cloud.firestore {
 
     function validPerson(id) {
       let d = request.resource.data;
-      return d.keys().hasOnly(['id', 'name', 'title', 'dept', 'role', 'managerId', 'functions', 'x', 'y', 'updatedBy', 'updatedAt'])
+      return d.keys().hasOnly(['id', 'name', 'title', 'dept', 'role', 'managerId', 'alsoReportsTo', 'functions', 'x', 'y', 'updatedBy', 'updatedAt'])
         && d.id == id
         && d.name is string && d.name.size() > 0 && d.name.size() <= 80
         && d.title is string && d.title.size() <= 120
         && d.dept is string && d.dept.size() <= 60
         && d.role in ['director', 'deputy', 'head', 'staff']
         && (d.managerId == null || (d.managerId is string && d.managerId != id))
+        && (!('alsoReportsTo' in d) || (d.alsoReportsTo is list && d.alsoReportsTo.size() <= 20 && !(id in d.alsoReportsTo)))
         && (!('functions' in d) || (d.functions is list && d.functions.size() <= 50))
         && (!('x' in d) || d.x == null || (d.x is number && d.x >= 0 && d.x <= 100000))
         && (!('y' in d) || d.y == null || (d.y is number && d.y >= 0 && d.y <= 100000))

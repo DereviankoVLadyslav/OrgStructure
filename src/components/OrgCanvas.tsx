@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
-import { ROLES, deptColor, descendantCount, descendants, kids, plural, type Area, type OrgIndex, type Person } from "../lib/org";
+import { ROLES, deptColor, descendantCount, descendants, kids, managersOf, plural, type Area, type OrgIndex, type Person } from "../lib/org";
 import { COMPACT, NORMAL, PAD, connectorPaths, snap, type Box, type Pt } from "../lib/layout";
 import type { Move } from "../lib/useOrg";
 import { matches } from "./OrgTree";
@@ -23,11 +23,14 @@ interface Props {
   onDragStart: () => void;
   onAreaSelect: (id: string, el: HTMLElement) => void;
   onAreaChange: (a: Area) => void;
+  /** A line was dragged from `managerId`'s card onto `subId`'s card. */
+  onLink: (managerId: string, subId: string) => void;
 }
 
 type Drag =
   | { kind: "card"; id: string; ids: string[]; start: Pt; origin: Map<string, Pt>; moved: boolean; el: HTMLElement }
-  | { kind: "area"; id: string; start: Pt; origin: Area; moved: boolean; el: HTMLElement; mode: "move" | "resize" };
+  | { kind: "area"; id: string; start: Pt; origin: Area; moved: boolean; el: HTMLElement; mode: "move" | "resize" }
+  | { kind: "link"; id: string; start: Pt; moved: boolean };
 
 const dcStyle = (p: Person) => ({ "--dc": deptColor(p.dept) }) as CSSProperties;
 
@@ -44,8 +47,10 @@ export function OrgCanvas(props: Props) {
   const [override, setOverride] = useState<Map<string, Pt> | null>(null);
   const [areaOverride, setAreaOverride] = useState<Area | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [linkLine, setLinkLine] = useState<{ from: Pt; to: Pt } | null>(null);
   const drag = useRef<Drag | null>(null);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
+  const worldRef = useRef<HTMLDivElement>(null);
 
   // Hidden = inside a collapsed branch (search shows everything).
   const hidden = useMemo(() => {
@@ -75,14 +80,22 @@ export function OrgCanvas(props: Props) {
   });
 
   const paths = useMemo(() => {
-    const out: string[] = [];
+    const out: { d: string; extra: boolean }[] = [];
+    // Group visible reporting lines by manager. Main lines share a bus; additional ones are drawn
+    // separately (dashed) so they never read as part of another team's bus.
+    const main = new Map<string, string[]>();
+    const extra = new Map<string, string[]>();
     for (const p of visible) {
-      if (collapsed.has(p.id) && !query) continue;
-      const ch = kids(index, p.id).filter((c) => !hidden.has(c.id));
-      if (ch.length) out.push(...connectorPaths(boxOf(p.id), ch.map((c) => boxOf(c.id))));
+      managersOf(p, people).forEach((b, i) => {
+        if (hidden.has(b) || (collapsed.has(b) && !query)) return;
+        const m = i === 0 ? main : extra;
+        m.set(b, [...(m.get(b) ?? []), p.id]);
+      });
     }
+    for (const [b, ch] of main) for (const d of connectorPaths(boxOf(b), ch.map(boxOf))) out.push({ d, extra: false });
+    for (const [b, ch] of extra) for (const c of ch) for (const d of connectorPaths(boxOf(b), [boxOf(c)], 34)) out.push({ d, extra: true });
     return out;
-  }, [visible, index, hidden, collapsed, query, positions, override, heights, compact]);
+  }, [visible, people, hidden, collapsed, query, positions, override, heights, compact]);
 
   // World size: everything plus room to drag further right/down.
   const allAreas = areas.map((a) => (areaOverride && a.id === areaOverride.id ? areaOverride : a));
@@ -116,9 +129,34 @@ export function OrgCanvas(props: Props) {
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
+  const onLinkDown = (e: RPointerEvent<HTMLElement>, id: string) => {
+    if (e.button !== 0 || !canEdit) return;
+    e.stopPropagation();
+    const b = boxOf(id);
+    drag.current = { kind: "link", id, start: { x: b.x + b.w / 2, y: b.y + b.h }, moved: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const cardUnder = (e: { clientX: number; clientY: number }, except: string) =>
+    document
+      .elementsFromPoint(e.clientX, e.clientY)
+      .map((el) => (el as HTMLElement).closest?.("[data-person]") as HTMLElement | null)
+      .find((el) => el && el.dataset.person !== except)?.dataset.person ?? null;
+
+  const worldPoint = (e: { clientX: number; clientY: number }): Pt => {
+    const r = worldRef.current!.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale };
+  };
+
   const onPointerMove = (e: RPointerEvent) => {
     const d = drag.current;
     if (!d) return;
+    if (d.kind === "link") {
+      d.moved = true;
+      setLinkLine({ from: d.start, to: worldPoint(e) });
+      setDropTarget(cardUnder(e, d.id));
+      return;
+    }
     const w = toWorld(e);
     const dx = w.x - d.start.x;
     const dy = w.y - d.start.y;
@@ -152,6 +190,13 @@ export function OrgCanvas(props: Props) {
     const d = drag.current;
     drag.current = null;
     if (!d) return;
+    if (d.kind === "link") {
+      const target = cardUnder(e, d.id);
+      setLinkLine(null);
+      setDropTarget(null);
+      if (target) props.onLink(d.id, target);
+      return;
+    }
     if (!d.moved) {
       if (d.kind === "card") props.onSelect(d.id, d.el);
       else if (d.mode === "move") props.onAreaSelect(d.id, d.el);
@@ -201,6 +246,7 @@ export function OrgCanvas(props: Props) {
   return (
     <div className="world-size" style={{ width: worldW * scale, height: worldH * scale }}>
       <div
+        ref={worldRef}
         className={"world" + (compact ? " compact" : "") + (canEdit ? " editable" : "") + (query ? " searching" : "")}
         style={{ width: worldW, height: worldH, transform: `scale(${scale})` }}
         onPointerMove={onPointerMove}
@@ -228,9 +274,12 @@ export function OrgCanvas(props: Props) {
         ))}
 
         <svg className="links" width={worldW} height={worldH} aria-hidden="true">
-          {paths.map((d, i) => (
-            <path key={i} d={d} />
+          {paths.map((p, i) => (
+            <path key={i} d={p.d} className={p.extra ? "extra" : undefined} />
           ))}
+          {linkLine && (
+            <path className="link-preview" d={`M${linkLine.from.x},${linkLine.from.y}L${linkLine.to.x},${linkLine.to.y}`} />
+          )}
         </svg>
 
         {visible.map((p) => {
@@ -306,6 +355,14 @@ export function OrgCanvas(props: Props) {
                 >
                   +
                 </button>
+              )}
+              {canEdit && (
+                <span
+                  className="link-handle"
+                  title="Протягніть до картки підлеглого, щоб додати підпорядкування"
+                  aria-hidden="true"
+                  onPointerDown={(e) => onLinkDown(e, p.id)}
+                />
               )}
               {children.length > 0 && (
                 <button
