@@ -1,13 +1,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { User } from "firebase/auth";
 import { plural } from "../lib/org";
-import type { AccessLevel, AccessList } from "../lib/useAccess";
+import type { AccessList, UserLevel } from "../lib/useAccess";
+import { ChartAccessPanel } from "./ChartAccessPanel";
 import type { ChartInfo, useCharts } from "../lib/useCharts";
 import { AccessPanel } from "./AccessPanel";
 
 interface Props {
   user: User;
-  level: AccessLevel;
+  level: UserLevel;
   list: AccessList;
   bootstrapped: boolean;
   onLogout: () => void;
@@ -15,7 +16,7 @@ interface Props {
   onOpen: (id: string) => void;
 }
 
-const LEVEL_LABEL: Record<AccessLevel, string> = { admin: "Адміністратор", editor: "Редактор", viewer: "Перегляд" };
+const LEVEL_LABEL: Record<UserLevel, string> = { admin: "Адміністратор", editor: "Редактор", viewer: "Перегляд", guest: "Окремі структури" };
 
 const when = (c: ChartInfo) =>
   c.updatedAt?.toDate ? c.updatedAt.toDate().toLocaleString("uk-UA", { dateStyle: "medium", timeStyle: "short" }) : "щойно";
@@ -23,12 +24,12 @@ const when = (c: ChartInfo) =>
 /** Home page: every org chart in the workspace, with create / rename / duplicate / delete. */
 export function Home({ user, level, list, bootstrapped, onLogout, charts, onOpen }: Props) {
   const myEmail = (user.email ?? "").toLowerCase();
-  const canEdit = level !== "viewer";
+  const canEdit = level === "admin" || level === "editor"; // create, duplicate, delete
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [showAccess, setShowAccess] = useState(false);
+  const [showAccess, setShowAccess] = useState<"all" | string | null>(null); // "all" or a chart id
   const [toast, setToast] = useState<string | null>(null);
 
   const say = (m: string) => {
@@ -115,7 +116,7 @@ export function Home({ user, level, list, bootstrapped, onLogout, charts, onOpen
             <span className="level">{LEVEL_LABEL[level]}</span>
           </span>
           {level === "admin" && (
-            <button className="btn" type="button" onClick={() => setShowAccess((v) => !v)}>Доступ</button>
+            <button className="btn" type="button" onClick={() => setShowAccess((v) => (v === "all" ? null : "all"))}>Доступ до всіх</button>
           )}
           <button className="btn" type="button" onClick={onLogout}>Вийти</button>
         </div>
@@ -125,8 +126,8 @@ export function Home({ user, level, list, bootstrapped, onLogout, charts, onOpen
         <div className="home">
           <div className="home-inner">
             <p className="home-lead">
-              Кожна структура — окрема схема зі своїми людьми, лініями підпорядкування й областями. Доступ спільний: хто
-              може редагувати одну, може редагувати всі.
+              Кожна структура — окрема схема зі своїми людьми, лініями підпорядкування й областями.
+              {level === "admin" && " Кнопка «Доступ» на картці відкриває структуру окремим людям; «Доступ до всіх» — для тих, хто бачить усе."}
             </p>
 
             {charts.error && <p className="err">{charts.error}</p>}
@@ -179,6 +180,9 @@ export function Home({ user, level, list, bootstrapped, onLogout, charts, onOpen
                         {count == null ? "…" : count < 0 ? "—" : `${count} ${plural(count, "співробітник", "співробітники", "співробітників")}`}
                       </span>
                       <span>Змінено {when(c)}</span>
+                      {level === "admin" && c.editors.length + c.viewers.length > 0 && (
+                        <span>Окремий доступ: {new Set([...c.editors, ...c.viewers]).size}</span>
+                      )}
                     </div>
 
                     {deleting === c.id ? (
@@ -194,6 +198,12 @@ export function Home({ user, level, list, bootstrapped, onLogout, charts, onOpen
                     ) : (
                       <div className="chart-actions">
                         <button className="btn primary" type="button" onClick={() => onOpen(c.id)}>Відкрити</button>
+                        {level === "admin" && (
+                          <button type="button" className="link" onClick={() => setShowAccess(c.id)}>Доступ</button>
+                        )}
+                        {!canEdit && c.editors.includes(myEmail) && (
+                          <button type="button" className="link" onClick={() => setRenaming({ id: c.id, name: c.name })}>Перейменувати</button>
+                        )}
                         {canEdit && (
                           <>
                             <button type="button" className="link" onClick={() => setRenaming({ id: c.id, name: c.name })}>Перейменувати</button>
@@ -208,14 +218,26 @@ export function Home({ user, level, list, bootstrapped, onLogout, charts, onOpen
               })}
 
               {list_ && list_.length === 0 && !canEdit && (
-                <div className="chart-card ghost">Структур ще немає. Їх створюють редактори.</div>
+                <div className="chart-card ghost">
+                  {level === "guest" ? "Вам ще не відкрили жодної структури." : "Структур ще немає. Їх створюють редактори."}
+                </div>
               )}
             </div>
           </div>
         </div>
 
-        {showAccess && level === "admin" && (
-          <AccessPanel list={list} myEmail={myEmail} onClose={() => setShowAccess(false)} onMessage={say} />
+        {showAccess === "all" && level === "admin" && (
+          <AccessPanel list={list} myEmail={myEmail} onClose={() => setShowAccess(null)} onMessage={say} />
+        )}
+        {showAccess && showAccess !== "all" && level === "admin" && list_?.find((c) => c.id === showAccess) && (
+          <ChartAccessPanel
+            key={showAccess}
+            chart={list_.find((c) => c.id === showAccess)!}
+            myEmail={myEmail}
+            onClose={() => setShowAccess(null)}
+            onMessage={say}
+            onOpenGlobal={() => setShowAccess("all")}
+          />
         )}
       </div>
 

@@ -94,29 +94,50 @@ service cloud.firestore {
     }
 
     // ---------- several charts ----------
+    // Each chart may list extra people: editors (may edit it) and viewers (may only see it).
+    // Workspace members from meta/access keep their role on every chart.
+    function chartDoc(chartId) { return get(/databases/$(database)/documents/charts/$(chartId)).data; }
+    function listed(d, field) { return field in d && me() in d[field]; }
+    function canViewChart(chartId) {
+      return isViewer() || (signedIn() && (listed(chartDoc(chartId), 'viewers') || listed(chartDoc(chartId), 'editors')));
+    }
+    function canEditChart(chartId) {
+      return isEditor() || (signedIn() && listed(chartDoc(chartId), 'editors'));
+    }
+
     function validChart() {
       let d = request.resource.data;
-      return d.keys().hasOnly(['name', 'compact', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt'])
+      return d.keys().hasOnly(['name', 'compact', 'editors', 'viewers', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt'])
         && d.name is string && d.name.size() > 0 && d.name.size() <= 80
         && (!('compact' in d) || d.compact is bool)
+        && (!('editors' in d) || emailList(d.editors))
+        && (!('viewers' in d) || emailList(d.viewers))
         && d.updatedBy == me()
         && d.updatedAt == request.time;
     }
+    // Only administrators change who has access to a chart.
+    function sameAccess() {
+      return request.resource.data.get('editors', []) == resource.data.get('editors', [])
+        && request.resource.data.get('viewers', []) == resource.data.get('viewers', []);
+    }
 
     match /charts/{chartId} {
-      allow read: if isViewer();
-      allow create, update: if isEditor() && validChart();
+      allow read: if isViewer()
+        || (signedIn() && (me() in resource.data.viewers || me() in resource.data.editors));
+      allow create: if isEditor() && validChart()
+        && (isAdmin() || (request.resource.data.get('editors', []) == [] && request.resource.data.get('viewers', []) == []));
+      allow update: if validChart() && (isAdmin() || ((isEditor() || listed(resource.data, 'editors')) && sameAccess()));
       allow delete: if isEditor();
 
       match /people/{id} {
-        allow read: if isViewer();
-        allow create, update: if isEditor() && validPerson(id);
-        allow delete: if isEditor();
+        allow read: if canViewChart(chartId);
+        allow create, update: if canEditChart(chartId) && validPerson(id);
+        allow delete: if canEditChart(chartId);
       }
       match /areas/{id} {
-        allow read: if isViewer();
-        allow create, update: if isEditor() && validArea(id);
-        allow delete: if isEditor();
+        allow read: if canViewChart(chartId);
+        allow create, update: if canEditChart(chartId) && validArea(id);
+        allow delete: if canEditChart(chartId);
       }
     }
 

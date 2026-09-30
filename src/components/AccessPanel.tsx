@@ -2,9 +2,9 @@ import { useState, type FormEvent } from "react";
 import { isValidEmail, setMemberLevel, type AccessLevel, type AccessList } from "../lib/useAccess";
 
 const LEVELS: { level: AccessLevel; label: string; hint: string }[] = [
-  { level: "admin", label: "Адміністратор", hint: "редагує структуру і керує доступом" },
-  { level: "editor", label: "Редактор", hint: "редагує структуру" },
-  { level: "viewer", label: "Перегляд", hint: "лише бачить структуру" },
+  { level: "admin", label: "Адміністратор", hint: "усі структури й керування доступом" },
+  { level: "editor", label: "Редактор", hint: "редагує всі структури" },
+  { level: "viewer", label: "Перегляд", hint: "бачить усі структури" },
 ];
 
 interface Props {
@@ -47,7 +47,7 @@ export function AccessPanel({ list, myEmail, onClose, onMessage }: Props) {
   return (
     <aside className="panel">
       <div className="panel-head">
-        <h2>Доступ до структури</h2>
+        <h2>Доступ до всіх структур</h2>
         <button className="x" type="button" aria-label="Закрити" onClick={onClose}>×</button>
       </div>
       <p className="note">

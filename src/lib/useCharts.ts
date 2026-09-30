@@ -6,6 +6,8 @@ import {
   getDoc,
   getDocFromServer,
   getDocs,
+  query,
+  where,
   onSnapshot,
   serverTimestamp,
   type Firestore,
@@ -22,7 +24,19 @@ export interface ChartInfo {
   createdAt?: Timestamp | null;
   updatedBy?: string;
   updatedAt?: Timestamp | null;
+  /** People who may edit / view only this chart (on top of workspace-wide roles). */
+  editors: string[];
+  viewers: string[];
+  compact?: boolean;
 }
+
+const toInfo = (id: string, d: Record<string, unknown>): ChartInfo => ({
+  ...(d as Omit<ChartInfo, "id" | "editors" | "viewers">),
+  id,
+  name: typeof d.name === "string" ? d.name : "",
+  editors: Array.isArray(d.editors) ? (d.editors as string[]) : [],
+  viewers: Array.isArray(d.viewers) ? (d.viewers as string[]) : [],
+});
 
 const newChartId = () => "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -50,26 +64,49 @@ async function copyInto(f: Firestore, fromPeople: string[], fromAreas: string[],
 }
 
 /** List of all org charts, plus create / rename / duplicate / delete. */
-export function useCharts(email: string, canEdit: boolean) {
+export function useCharts(email: string, canEdit: boolean, isAdmin: boolean, guest: boolean) {
   const [charts, setCharts] = useState<ChartInfo[] | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false); // list came from the server, not the local cache
 
   useEffect(() => {
-    if (!db) return;
-    return onSnapshot(
-      collection(db, "charts"),
-      (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ChartInfo, "id">) }));
-        list.sort((a, b) => (b.updatedAt?.toMillis?.() ?? Date.now()) - (a.updatedAt?.toMillis?.() ?? Date.now()));
-        setCharts(list);
-        if (!snap.metadata.fromCache) setConfirmed(true);
-        setError(null);
-      },
-      () => setError("Не вдалося завантажити список структур."),
-    );
-  }, []);
+    const f = db;
+    if (!f) return;
+    const sort = (list: ChartInfo[]) =>
+      list.sort((a, b) => (b.updatedAt?.toMillis?.() ?? Date.now()) - (a.updatedAt?.toMillis?.() ?? Date.now()));
+    const fail = () => setError("Не вдалося завантажити список структур.");
+    if (!guest) {
+      // workspace members see every chart
+      return onSnapshot(
+        collection(f, "charts"),
+        (snap) => {
+          setCharts(sort(snap.docs.map((d) => toInfo(d.id, d.data()))));
+          if (!snap.metadata.fromCache) setConfirmed(true);
+          setError(null);
+        },
+        fail,
+      );
+    }
+    // guests see only the charts they were added to
+    const parts: Record<"v" | "e", ChartInfo[]> = { v: [], e: [] };
+    const merge = () => {
+      const byId = new Map([...parts.v, ...parts.e].map((c) => [c.id, c]));
+      setCharts(sort([...byId.values()]));
+    };
+    const u1 = onSnapshot(query(collection(f, "charts"), where("viewers", "array-contains", email)), (s) => {
+      parts.v = s.docs.map((d) => toInfo(d.id, d.data()));
+      merge();
+    }, fail);
+    const u2 = onSnapshot(query(collection(f, "charts"), where("editors", "array-contains", email)), (s) => {
+      parts.e = s.docs.map((d) => toInfo(d.id, d.data()));
+      merge();
+    }, fail);
+    return () => {
+      u1();
+      u2();
+    };
+  }, [guest, email]);
 
   // Number of people in each chart (a cheap count query, refreshed when the list changes).
   const idsKey = charts?.map((c) => `${c.id}:${c.updatedAt?.toMillis?.() ?? ""}`).join(",") ?? "";
@@ -107,6 +144,8 @@ export function useCharts(email: string, canEdit: boolean) {
           b.set(doc(f, "charts", "main"), {
             name: ((company.data()?.name as string) || "Основна структура").slice(0, 80),
             compact: company.data()?.compact === true,
+            editors: [],
+            viewers: [],
             createdBy: email,
             createdAt: serverTimestamp(),
             updatedBy: email,
@@ -130,6 +169,8 @@ export function useCharts(email: string, canEdit: boolean) {
           b.set(doc(f, "charts", id), {
             name: name.trim().slice(0, 80),
             compact: false,
+            editors: [],
+            viewers: [],
             createdBy: email,
             createdAt: serverTimestamp(),
             updatedBy: email,
@@ -161,6 +202,9 @@ export function useCharts(email: string, canEdit: boolean) {
         b.set(doc(f, "charts", id), {
           name: name.trim().slice(0, 80),
           compact: src.data()?.compact === true,
+          // only an administrator hands out access, so only they copy the access lists
+          editors: isAdmin ? source.editors : [],
+          viewers: isAdmin ? source.viewers : [],
           createdBy: email,
           createdAt: serverTimestamp(),
           updatedBy: email,
@@ -170,7 +214,7 @@ export function useCharts(email: string, canEdit: boolean) {
       await runOps(f, ops);
       return id;
     },
-    [email],
+    [email, isAdmin],
   );
 
   /** Deletes a chart with everything in it. */

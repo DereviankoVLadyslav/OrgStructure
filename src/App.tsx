@@ -11,13 +11,14 @@ import { COMPACT, NORMAL, PAD, autoLayout, freeSpot, type Pt } from "./lib/layou
 import type { Move } from "./lib/useOrg";
 import { isConfigured } from "./lib/firebase";
 import { useAuth } from "./lib/useAuth";
-import { useAccess, type AccessLevel, type AccessList } from "./lib/useAccess";
+import { useAccess, type AccessList, type UserLevel } from "./lib/useAccess";
+import { ChartAccessPanel } from "./components/ChartAccessPanel";
 import { useOrg } from "./lib/useOrg";
 import { useCharts, type ChartInfo } from "./lib/useCharts";
 import { Home } from "./components/Home";
 
 const COLLAPSED_KEY = "org-chart.collapsed";
-const LEVEL_LABEL: Record<AccessLevel, string> = { admin: "Адміністратор", editor: "Редактор", viewer: "Перегляд" };
+const LEVEL_LABEL: Record<UserLevel, string> = { admin: "Адміністратор", editor: "Редактор", viewer: "Перегляд", guest: "Окремі структури" };
 
 function loadCollapsed(chartId: string): Set<string> {
   try {
@@ -68,8 +69,8 @@ function useHashRoute() {
 
 function Workspace({ user, level, list, bootstrapped, onLogout }: Omit<ChartProps, "chartId" | "charts" | "onOpenChart">) {
   const myEmail = (user.email ?? "").toLowerCase();
-  const canEdit = level !== "viewer";
-  const charts = useCharts(myEmail, canEdit);
+  const canEdit = level === "admin" || level === "editor";
+  const charts = useCharts(myEmail, canEdit, level === "admin", level === "guest");
   const [chartId, go] = useHashRoute();
   if (chartId)
     return (
@@ -93,7 +94,7 @@ interface ChartProps {
   charts: ChartInfo[];
   onOpenChart: (id: string | null) => void;
   user: User;
-  level: AccessLevel;
+  level: UserLevel;
   list: AccessList;
   bootstrapped: boolean;
   onLogout: () => void;
@@ -101,13 +102,15 @@ interface ChartProps {
 
 function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, onLogout }: ChartProps) {
   const myEmail = (user.email ?? "").toLowerCase();
-  const canEdit = level !== "viewer";
+  const chartInfo = charts.find((c) => c.id === chartId);
+  // workspace editors edit every chart; others only the charts they were given edit access to
+  const canEdit = level === "admin" || level === "editor" || (chartInfo?.editors.includes(myEmail) ?? false);
   const { people: rows, company, compact, areas, missing, error, upsert, remove, setCompany, setCompact, move, upsertArea, removeArea, replaceAll } =
     useOrg(chartId, myEmail);
 
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed(chartId));
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [side, setSide] = useState<"person" | "access" | null>(null);
+  const [side, setSide] = useState<"person" | "access" | "global-access" | null>(null);
   const [popover, setPopover] = useState<{ id: string; anchor: DOMRect } | null>(null);
   const [areaPop, setAreaPop] = useState<{ id: string; anchor: DOMRect } | null>(null);
   const [confirmArrange, setConfirmArrange] = useState(false);
@@ -706,7 +709,16 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
             }}
           />
         )}
-        {side === "access" && level === "admin" && (
+        {side === "access" && level === "admin" && chartInfo && (
+          <ChartAccessPanel
+            chart={chartInfo}
+            myEmail={myEmail}
+            onClose={() => setSide(null)}
+            onMessage={say}
+            onOpenGlobal={() => setSide("global-access")}
+          />
+        )}
+        {side === "global-access" && level === "admin" && (
           <AccessPanel list={list} myEmail={myEmail} onClose={() => setSide(null)} onMessage={say} />
         )}
       </div>

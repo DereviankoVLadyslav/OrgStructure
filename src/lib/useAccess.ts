@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { doc, onSnapshot, setDoc, updateDoc, arrayRemove, arrayUnion, type FieldValue } from "firebase/firestore";
+import { collection, doc, getDocs, onSnapshot, query, setDoc, updateDoc, where, arrayRemove, arrayUnion, serverTimestamp, type FieldValue } from "firebase/firestore";
 import type { User } from "firebase/auth";
 import { db } from "./firebase";
 
 export type AccessLevel = "admin" | "editor" | "viewer";
+/** A person's workspace-wide role. "guest" = no global role, only access to individual charts. */
+export type UserLevel = AccessLevel | "guest";
 
 export interface AccessList {
   admins: string[];
@@ -15,7 +17,7 @@ export type AccessState =
   | { status: "loading" }
   | { status: "denied"; email: string }
   | { status: "error"; message: string }
-  | { status: "ok"; level: AccessLevel; list: AccessList; bootstrapped: boolean };
+  | { status: "ok"; level: UserLevel; list: AccessList; bootstrapped: boolean };
 
 const FIELD: Record<AccessLevel, keyof AccessList> = { admin: "admins", editor: "editors", viewer: "viewers" };
 
@@ -46,6 +48,25 @@ export function useAccess(user: User | null) {
     let bootstrapped = false;
     setState({ status: "loading" });
 
+    // Not on the workspace list: maybe they were given access to individual charts.
+    const checkGuest = async () => {
+      try {
+        const charts = collection(firestore, "charts");
+        const [v, e] = await Promise.all([
+          getDocs(query(charts, where("viewers", "array-contains", email))),
+          getDocs(query(charts, where("editors", "array-contains", email))),
+        ]);
+        if (cancelled) return;
+        setState(
+          v.empty && e.empty
+            ? { status: "denied", email }
+            : { status: "ok", level: "guest", list: { admins: [], editors: [], viewers: [] }, bootstrapped: false },
+        );
+      } catch {
+        if (!cancelled) setState({ status: "denied", email });
+      }
+    };
+
     const listen = () => {
       unsub = onSnapshot(
         ref,
@@ -53,7 +74,8 @@ export function useAccess(user: User | null) {
           const d = snap.data() as Partial<AccessList> | undefined;
           const list: AccessList = { admins: d?.admins ?? [], editors: d?.editors ?? [], viewers: d?.viewers ?? [] };
           const level = levelOf(list, email);
-          setState(level ? { status: "ok", level, list, bootstrapped } : { status: "denied", email });
+          if (level) setState({ status: "ok", level, list, bootstrapped });
+          else void checkGuest();
         },
         async (err) => {
           if (cancelled) return;
@@ -62,14 +84,14 @@ export function useAccess(user: User | null) {
             return;
           }
           // Denied means either "not on the list" or "the list does not exist yet".
-          if (triedBootstrap) return setState({ status: "denied", email });
+          if (triedBootstrap) return checkGuest();
           triedBootstrap = true;
           try {
             await setDoc(ref, { admins: [email], editors: [], viewers: [] });
             bootstrapped = true;
             if (!cancelled) listen(); // the failed listener is closed; open a fresh one
           } catch {
-            if (!cancelled) setState({ status: "denied", email });
+            if (!cancelled) await checkGuest();
           }
         },
       );
@@ -100,4 +122,18 @@ export async function setMemberLevel(email: string, level: AccessLevel | null) {
 
 export function isValidEmail(v: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+}
+
+/** Gives or removes access to one chart: "editor" or "viewer", or null to remove. */
+export async function setChartMember(chartId: string, email: string, level: "editor" | "viewer" | null, by: string) {
+  if (!db) return;
+  const e = norm(email);
+  const updates: Record<string, FieldValue | string> = {
+    viewers: arrayRemove(e),
+    editors: arrayRemove(e),
+    updatedBy: by,
+    updatedAt: serverTimestamp(),
+  };
+  if (level) updates[level === "editor" ? "editors" : "viewers"] = arrayUnion(e);
+  await updateDoc(doc(db, "charts", chartId), updates);
 }
