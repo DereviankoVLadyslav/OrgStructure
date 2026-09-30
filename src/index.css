@@ -326,3 +326,17 @@ fieldset.field{border:0;margin:0;padding:0}
 .switch{height:24px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);font-size:12px;text-transform:none;letter-spacing:0;max-width:220px;padding:0 4px}
 .chart-card .fn-input{flex:none;height:38px}
 .signin{display:flex;flex-direction:column;gap:12px}
+
+/* ---------- linked charts ---------- */
+.card.link-card{background:var(--surface-2);border:2px solid var(--accent);border-radius:12px}
+.card.link-card .dept{color:var(--accent)}
+.card.link-card .name{font-family:var(--display);font-weight:700}
+.link-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.link-actions .chip{height:24px;font-size:11.5px;padding:0 9px}
+.card.compact.link-card .link-actions{display:none}
+.embed-frame{position:absolute;border:1.5px dashed color-mix(in srgb,var(--accent) 45%,transparent);border-radius:16px;background:color-mix(in srgb,var(--accent-soft) 35%,transparent);pointer-events:none}
+.embed-label{position:absolute;left:14px;top:7px;pointer-events:auto;border:0;background:none;padding:2px 6px;border-radius:6px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);cursor:pointer}
+.embed-label:hover{background:var(--accent-soft)}
+.card.embedded{cursor:pointer;box-shadow:none;opacity:.94}
+.card.embedded:hover{opacity:1;box-shadow:var(--shadow)}
+.links path.embedded{stroke-opacity:.75}

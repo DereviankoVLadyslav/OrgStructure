@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
-import { ROLES, deptColor, descendantCount, descendants, kids, managersOf, plural, type Area, type OrgIndex, type Person } from "../lib/org";
+import { ROLES, buildIndex, deptColor, descendantCount, descendants, kids, managersOf, plural, type Area, type OrgIndex, type Person } from "../lib/org";
+import { autoLayout } from "../lib/layout";
+import type { LinkedChart } from "../lib/useLinked";
 import { COMPACT, NORMAL, PAD, connectorPaths, snap, type Box, type Pt } from "../lib/layout";
 import type { Move } from "../lib/useOrg";
 import { matches } from "./OrgTree";
@@ -27,6 +29,24 @@ interface Props {
   onLink: (managerId: string, subId: string) => void;
   /** A line was dragged from `managerId`'s card and dropped on empty space at `at` (canvas coordinates). */
   onLinkToEmpty: (managerId: string, at: Pt) => void;
+  /** live data of charts that link cards point to */
+  linked: Record<string, LinkedChart>;
+  /** link cards whose chart is folded away (shown expanded otherwise) */
+  foldedLinks: Set<string>;
+  onToggleLink: (cardId: string) => void;
+  onOpenChart: (chartId: string) => void;
+  /** a card inside an embedded (linked) chart was clicked */
+  onSelectEmbedded: (chartId: string, personId: string, el: HTMLElement) => void;
+}
+
+interface Embedded {
+  cardId: string;
+  chartId: string;
+  name: string;
+  frame: Box;
+  cards: { key: string; person: Person; x: number; y: number }[];
+  boxes: Map<string, Box>;
+  people: Map<string, Person>;
 }
 
 type Drag =
@@ -81,6 +101,55 @@ export function OrgCanvas(props: Props) {
     if (changed) setHeights(next);
   });
 
+  // Linked charts shown inside this one: their own layout, placed under the link card and framed.
+  const embedded = useMemo(() => {
+    const out: Embedded[] = [];
+    for (const card of visible) {
+      const chartId = card.linkChart;
+      if (!chartId || props.foldedLinks.has(card.id)) continue;
+      const data = props.linked[chartId];
+      if (!data?.people?.length) continue;
+      const map = new Map(data.people.map((q) => [q.id, q as Person]));
+      const auto = autoLayout(buildIndex(map), m);
+      const raw = data.people.map((q) => ({ q, p: q.x != null && q.y != null ? { x: q.x, y: q.y } : auto.get(q.id) ?? { x: 0, y: 0 } }));
+      const minX = Math.min(...raw.map((r) => r.p.x));
+      const minY = Math.min(...raw.map((r) => r.p.y));
+      const maxX = Math.max(...raw.map((r) => r.p.x + m.w));
+      const lb = boxOf(card.id);
+      const dx = Math.round(lb.x + lb.w / 2 - (maxX - minX) / 2 - minX);
+      const dy = Math.round(lb.y + lb.h + 72 - minY);
+      const cards = raw.map(({ q, p }) => ({ key: `${card.id}:${q.id}`, person: q as Person, x: p.x + dx, y: p.y + dy }));
+      const boxes = new Map(cards.map((c) => [c.person.id, { x: c.x, y: c.y, w: m.w, h: heights.get(c.key) ?? m.h }]));
+      const all = [...boxes.values()];
+      const fx = Math.min(...all.map((b) => b.x)) - 20;
+      const fy = Math.min(...all.map((b) => b.y)) - 34;
+      const frame = {
+        x: fx,
+        y: fy,
+        w: Math.max(...all.map((b) => b.x + b.w)) + 20 - fx,
+        h: Math.max(...all.map((b) => b.y + b.h)) + 24 - fy,
+      };
+      out.push({ cardId: card.id, chartId, name: data.name, frame, cards, boxes, people: map });
+    }
+    return out;
+  }, [visible, props.linked, props.foldedLinks, positions, override, heights, compact]);
+
+  const embeddedPaths = useMemo(() => {
+    const out: string[] = [];
+    for (const g of embedded) {
+      const bosses = new Map<string, string[]>();
+      const roots: Box[] = [];
+      for (const q of g.people.values()) {
+        const ms = managersOf(q, g.people);
+        if (!ms.length) roots.push(g.boxes.get(q.id)!);
+        ms.forEach((b) => bosses.set(b, [...(bosses.get(b) ?? []), q.id]));
+      }
+      for (const [b, ch] of bosses) out.push(...connectorPaths(g.boxes.get(b)!, ch.map((c) => g.boxes.get(c)!)));
+      if (roots.length) out.push(...connectorPaths(boxOf(g.cardId), roots, 36));
+    }
+    return out;
+  }, [embedded]);
+
   const paths = useMemo(() => {
     const out: { d: string; extra: boolean }[] = [];
     // Group visible reporting lines by manager. Main lines share a bus; additional ones are drawn
@@ -111,6 +180,10 @@ export function OrgCanvas(props: Props) {
   for (const a of allAreas) {
     worldW = Math.max(worldW, a.x + a.w + 320);
     worldH = Math.max(worldH, a.y + a.h + 240);
+  }
+  for (const g of embedded) {
+    worldW = Math.max(worldW, g.frame.x + g.frame.w + 320);
+    worldH = Math.max(worldH, g.frame.y + g.frame.h + 240);
   }
 
   /* ---------- dragging ---------- */
@@ -280,9 +353,20 @@ export function OrgCanvas(props: Props) {
           </div>
         ))}
 
+        {embedded.map((g) => (
+          <div key={g.cardId} className="embed-frame" style={{ left: g.frame.x, top: g.frame.y, width: g.frame.w, height: g.frame.h }}>
+            <button type="button" className="embed-label" onClick={() => props.onOpenChart(g.chartId)} title="Відкрити цю структуру">
+              ↗ {g.name || "Пов'язана структура"}
+            </button>
+          </div>
+        ))}
+
         <svg className="links" width={worldW} height={worldH} aria-hidden="true">
           {paths.map((p, i) => (
             <path key={i} d={p.d} />
+          ))}
+          {embeddedPaths.map((d, i) => (
+            <path key={"e" + i} d={d} className="embedded" />
           ))}
           {linkLine && (
             <path className="link-preview" d={`M${linkLine.from.x},${linkLine.from.y}L${linkLine.to.x},${linkLine.to.y}`} />
@@ -296,7 +380,7 @@ export function OrgCanvas(props: Props) {
           const dragging = override?.has(p.id);
           const cls = [
             "card",
-            p.role,
+            p.linkChart ? "link-card" : p.role,
             compact && "compact",
             p.id === selectedId && "selected",
             matches(p, query) && "hit",
@@ -328,6 +412,17 @@ export function OrgCanvas(props: Props) {
                 }
               }}
             >
+              {p.linkChart ? (
+                <LinkCardBody
+                  card={p}
+                  data={props.linked[p.linkChart]}
+                  folded={props.foldedLinks.has(p.id)}
+                  compact={compact}
+                  onOpen={() => props.onOpenChart(p.linkChart!)}
+                  onToggle={() => props.onToggleLink(p.id)}
+                />
+              ) : (
+              <>
               {!compact && (
                 <div className="dept">
                   <i />
@@ -349,7 +444,9 @@ export function OrgCanvas(props: Props) {
                   )}
                 </div>
               )}
-              {canEdit && (
+              </>
+              )}
+              {canEdit && !p.linkChart && (
                 <button
                   className="add"
                   type="button"
@@ -363,7 +460,7 @@ export function OrgCanvas(props: Props) {
                   +
                 </button>
               )}
-              {canEdit && (
+              {canEdit && !p.linkChart && (
                 <span
                   className="link-handle"
                   title="Протягніть до картки підлеглого, щоб додати підпорядкування"
@@ -388,6 +485,51 @@ export function OrgCanvas(props: Props) {
           );
         })}
 
+        {/* cards of linked charts: live, read-only here */}
+        {embedded.flatMap((g) =>
+          g.cards.map(({ key, person: q, x, y }) => (
+            <div
+              key={key}
+              ref={(el) => {
+                if (el) cardRefs.current.set(key, el);
+                else cardRefs.current.delete(key);
+              }}
+              className={["card", "embedded", q.linkChart ? "link-card" : q.role, compact && "compact", matches(q, query) && "hit"].filter(Boolean).join(" ")}
+              style={{ ...dcStyle(q), left: x, top: y, width: m.w }}
+              role="button"
+              tabIndex={0}
+              data-embedded={key}
+              aria-label={`${q.name}, ${q.title} (структура «${g.name}»)`}
+              title={compact ? [q.name, q.title].filter(Boolean).join("\n") : undefined}
+              onClick={(e) => (q.linkChart ? props.onOpenChart(q.linkChart) : props.onSelectEmbedded(g.chartId, q.id, e.currentTarget))}
+              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && props.onSelectEmbedded(g.chartId, q.id, e.currentTarget)}
+            >
+              {q.linkChart ? (
+                <div className="name">↗ {q.name}</div>
+              ) : (
+                <>
+                  {!compact && (
+                    <div className="dept">
+                      <i />
+                      {q.dept || "Без підрозділу"}
+                    </div>
+                  )}
+                  <div className="name">
+                    {compact && <i className="dot" />}
+                    {q.name}
+                  </div>
+                  {!compact && q.title && <div className="title">{q.title}</div>}
+                  {!compact && (
+                    <div className="card-foot">
+                      <span className="badge">{ROLES[q.role].label}</span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )),
+        )}
+
         {/* resize handles sit above the cards so they can always be grabbed */}
         {canEdit &&
           allAreas.map((a) => {
@@ -404,5 +546,51 @@ export function OrgCanvas(props: Props) {
           })}
       </div>
     </div>
+  );
+}
+
+/** Content of a card that stands for another chart. */
+function LinkCardBody({
+  card,
+  data,
+  folded,
+  compact,
+  onOpen,
+  onToggle,
+}: {
+  card: Person;
+  data: LinkedChart | undefined;
+  folded: boolean;
+  compact: boolean;
+  onOpen: () => void;
+  onToggle: () => void;
+}) {
+  const n = data?.people?.length ?? 0;
+  const status = !data
+    ? "Завантаження…"
+    : data.denied
+      ? "Немає доступу"
+      : data.missing
+        ? "Структуру видалено"
+        : data.people
+          ? `${n} ${plural(n, "картка", "картки", "карток")}`
+          : "Завантаження…";
+  const usable = data && !data.denied && !data.missing;
+  return (
+    <>
+      {!compact && <div className="dept">Пов'язана структура</div>}
+      <div className="name">↗ {data?.name || card.name}</div>
+      {!compact && <div className="title">{status}</div>}
+      {usable && (
+        <div className="link-actions">
+          <button type="button" className="chip" onClick={(e) => (e.stopPropagation(), onOpen())}>Відкрити</button>
+          {n > 0 && (
+            <button type="button" className="chip" onClick={(e) => (e.stopPropagation(), onToggle())}>
+              {folded ? "Показати" : "Сховати"}
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }

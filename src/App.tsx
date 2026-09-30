@@ -13,6 +13,9 @@ import { isConfigured } from "./lib/firebase";
 import { useAuth } from "./lib/useAuth";
 import { useAccess, type AccessList, type UserLevel } from "./lib/useAccess";
 import { ChartAccessPanel } from "./components/ChartAccessPanel";
+import { LinkPopover } from "./components/LinkPopover";
+import { LinkPanel } from "./components/LinkPanel";
+import { useLinkedCharts } from "./lib/useLinked";
 import { useOrg } from "./lib/useOrg";
 import { useCharts, type ChartInfo } from "./lib/useCharts";
 import { Home } from "./components/Home";
@@ -110,8 +113,16 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
 
   const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed(chartId));
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [side, setSide] = useState<"person" | "access" | "global-access" | null>(null);
+  const [side, setSide] = useState<"person" | "access" | "global-access" | "link" | null>(null);
   const [popover, setPopover] = useState<{ id: string; anchor: DOMRect } | null>(null);
+  const [embPop, setEmbPop] = useState<{ chartId: string; id: string; anchor: DOMRect } | null>(null);
+  const [foldedLinks, setFoldedLinks] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(`org-chart.folded-links.${chartId}`) ?? "[]"));
+    } catch {
+      return new Set();
+    }
+  });
   const [areaPop, setAreaPop] = useState<{ id: string; anchor: DOMRect } | null>(null);
   const [confirmArrange, setConfirmArrange] = useState(false);
   const [query, setQuery] = useState("");
@@ -135,8 +146,9 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
   }, [people, auto]);
   const manualLayout = useMemo(() => [...people.values()].some((p) => p.x != null && p.y != null), [people]);
 
+  const linked = useLinkedCharts((rows ?? []).map((p) => p.linkChart).filter((x): x is string => !!x));
   const departments = useMemo(
-    () => [...new Set((rows ?? []).map((p) => p.dept).filter(Boolean))].sort((a, b) => a.localeCompare(b, "uk")),
+    () => [...new Set((rows ?? []).filter((p) => !p.linkChart).map((p) => p.dept).filter(Boolean))].sort((a, b) => a.localeCompare(b, "uk")),
     [rows],
   );
 
@@ -190,7 +202,15 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
   const fit = useCallback(() => {
     const c = canvasRef.current;
     if (!c || !bounds.w) return;
-    const z = Math.min(1, Math.max(0.3, Math.min((c.clientWidth - 16) / bounds.w, (c.clientHeight - 16) / bounds.h)));
+    // include linked charts shown on the canvas (their cards are laid out by the canvas itself)
+    let w = bounds.w;
+    let h = bounds.h;
+    const frames = c.querySelectorAll<HTMLElement>(".embed-frame");
+    frames.forEach((f) => {
+      w = Math.max(w, f.offsetLeft + f.offsetWidth + PAD);
+      h = Math.max(h, f.offsetTop + f.offsetHeight + PAD);
+    });
+    const z = Math.min(1, Math.max(0.3, Math.min((c.clientWidth - 16) / w, (c.clientHeight - 16) / h)));
     setZoomState(Math.round(z * 100) / 100);
     requestAnimationFrame(() => {
       c.scrollLeft = 0;
@@ -246,17 +266,19 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
   // The menu is anchored to a card; moving the chart would leave it floating in the wrong place.
   useEffect(() => {
     const c = canvasRef.current;
-    if (!c || (!popover && !areaPop)) return;
+    if (!c || (!popover && !areaPop && !embPop)) return;
     const close = () => {
       setPopover(null);
       setAreaPop(null);
+      setEmbPop(null);
     };
     c.addEventListener("scroll", close, { passive: true });
     return () => c.removeEventListener("scroll", close);
-  }, [popover, areaPop]);
+  }, [popover, areaPop, embPop]);
   useEffect(() => {
     setPopover(null);
     setAreaPop(null);
+    setEmbPop(null);
   }, [zoom, collapsed, query, compact]);
 
   useEffect(() => {
@@ -307,6 +329,50 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
   };
 
   /** Clicking a card opens (or closes) its small menu. */
+  const toggleLink = (cardId: string) =>
+    setFoldedLinks((s) => {
+      const next = new Set(s);
+      if (next.has(cardId)) next.delete(cardId);
+      else next.add(cardId);
+      try {
+        localStorage.setItem(`org-chart.folded-links.${chartId}`, JSON.stringify([...next]));
+      } catch {
+        /* per-browser convenience only */
+      }
+      return next;
+    });
+
+  /** Puts a live link to another chart on this one. */
+  const addLink = async (targetId: string, managerId: string | null) => {
+    const target = charts.find((c) => c.id === targetId);
+    let spot: Pt | null = null;
+    if (manualLayout) {
+      const taken = [...positions.values()].map((p) => ({ ...p, w: metrics.w, h: metrics.h }));
+      const mp = managerId ? positions.get(managerId) : undefined;
+      spot = freeSpot(mp ? { ...mp, w: metrics.w, h: metrics.h } : null, taken, metrics);
+    }
+    const card: Person = {
+      id: newId(),
+      name: (target?.name || "Структура").slice(0, 80),
+      title: "",
+      dept: "",
+      role: "staff",
+      managerId,
+      alsoReportsTo: [],
+      functions: [],
+      x: spot?.x ?? null,
+      y: spot?.y ?? null,
+      linkChart: targetId,
+    };
+    setSide(null);
+    try {
+      await upsert(card);
+      say(`Структуру «${card.name}» приєднано`);
+    } catch (e) {
+      writeFailed(e);
+    }
+  };
+
   const openPopover = (id: string, el: HTMLElement) => {
     if (popover?.id === id) return setPopover(null);
     if (side === "person") {
@@ -470,7 +536,7 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
     const data = {
       company,
       compact,
-      people: (rows ?? []).map(({ id, name, title, dept, role, managerId, alsoReportsTo, functions, x, y }) => ({ id, name, title, dept, role, managerId, alsoReportsTo, functions, x, y })),
+      people: (rows ?? []).map(({ id, name, title, dept, role, managerId, alsoReportsTo, functions, x, y, linkChart }) => ({ id, name, title, dept, role, managerId, alsoReportsTo, functions, x, y, linkChart })),
       areas,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -506,7 +572,7 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
   const loadDemo = () =>
     importData(async () => (await fetch(`${import.meta.env.BASE_URL}org.json`)).json(), "Демо-структуру завантажено");
 
-  const n = rows?.length ?? 0;
+  const n = rows?.filter((p) => !p.linkChart).length ?? 0;
   const roots = kids(index, null);
   const current = draft && !draft.isNew ? people.get(draft.person.id) : undefined;
   const lastChange =
@@ -612,6 +678,7 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
           {canEdit && (
             <>
               <button type="button" className="chip" onClick={addArea}>+ Область</button>
+              <button type="button" className="chip" onClick={() => setSide(side === "link" ? null : "link")}>+ Структура</button>
               {confirmArrange ? (
                 <span className="confirm-inline">
                   Розставити всі картки автоматично? Ручне розміщення буде втрачено.
@@ -687,10 +754,26 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
               onAreaChange={saveArea}
               onLink={onLink}
               onLinkToEmpty={(managerId, at) => openNew(managerId, "staff", at)}
+              linked={linked}
+              foldedLinks={foldedLinks}
+              onToggleLink={toggleLink}
+              onOpenChart={(id) => onOpenChart(id)}
+              onSelectEmbedded={(cid, id, el) => {
+                setPopover(null);
+                setEmbPop({ chartId: cid, id, anchor: el.getBoundingClientRect() });
+              }}
             />
           )}
         </div>
 
+        {side === "link" && canEdit && (
+          <LinkPanel
+            charts={charts.filter((c) => c.id !== chartId && !(rows ?? []).some((p) => p.linkChart === c.id))}
+            people={rows ?? []}
+            onCreate={addLink}
+            onClose={() => setSide(null)}
+          />
+        )}
         {side === "person" && draft && (
           <PersonPanel
             draft={draft}
@@ -723,7 +806,52 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
         )}
       </div>
 
-      {popover && people.get(popover.id) && (() => {
+      {popover && people.get(popover.id)?.linkChart && (() => {
+        const card = people.get(popover.id)!;
+        const bosses = managersOf(card, people);
+        return (
+          <LinkPopover
+            key={card.id}
+            card={card}
+            data={linked[card.linkChart!]}
+            anchor={popover.anchor}
+            canEdit={canEdit}
+            folded={foldedLinks.has(card.id)}
+            managerName={bosses.length ? bosses.map((b) => people.get(b)?.name).join(", ") : undefined}
+            onOpen={() => onOpenChart(card.linkChart!)}
+            onToggle={() => toggleLink(card.id)}
+            onRemove={() => {
+              setPopover(null);
+              onDelete(card.id);
+            }}
+            onClose={closePopover}
+          />
+        );
+      })()}
+
+      {embPop && (() => {
+        const data = linked[embPop.chartId];
+        const q = data?.people?.find((x) => x.id === embPop.id);
+        if (!q || !data?.people) return null;
+        const map = new Map(data.people.map((x) => [x.id, x]));
+        const bosses = managersOf(q, map);
+        return (
+          <PersonPopover
+            key={`${embPop.chartId}:${q.id}`}
+            person={q}
+            anchor={embPop.anchor}
+            canEdit={false}
+            managerName={bosses.length ? bosses.map((b) => map.get(b)?.name).join(", ") : undefined}
+            reportsCount={reportsOf(q.id, map).length}
+            onChangeFunctions={async () => {}}
+            onEdit={() => onOpenChart(embPop.chartId)}
+            onAddSub={() => {}}
+            onClose={() => setEmbPop(null)}
+          />
+        );
+      })()}
+
+      {popover && people.get(popover.id) && !people.get(popover.id)!.linkChart && (() => {
         const p = people.get(popover.id)!;
         const bosses = managersOf(p, people);
         return (

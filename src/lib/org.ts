@@ -14,6 +14,8 @@ export interface Person {
   /** Position on the canvas (top-left corner). null = placed automatically. */
   x: number | null;
   y: number | null;
+  /** When set, this card is a live link to another chart (its id) instead of a person. */
+  linkChart?: string | null;
 }
 
 export type AreaShape = "rect" | "ellipse";
@@ -157,6 +159,7 @@ export function parseOrgData(raw: unknown): OrgData {
       functions: cleanFunctions(p.functions),
       x: cleanCoord(p.x),
       y: cleanCoord(p.y),
+      linkChart: cleanLink(p.linkChart),
     };
   });
   const areas = Array.isArray((obj as { areas?: unknown }).areas)
@@ -244,3 +247,9 @@ export function wouldCycle(managerId: string, subId: string, people: Map<string,
   }
   return false;
 }
+
+export function cleanLink(v: unknown): string | null {
+  return typeof v === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(v) ? v : null;
+}
+
+export const isLink = (p: Person) => !!p.linkChart;

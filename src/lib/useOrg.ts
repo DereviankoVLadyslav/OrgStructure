@@ -11,7 +11,7 @@ import {
   type WriteBatch,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import { cleanArea, cleanCoord, cleanFunctions, cleanIds, isRole, type Area, type OrgData, type Person } from "./org";
+import { cleanArea, cleanCoord, cleanFunctions, cleanIds, cleanLink, isRole, type Area, type OrgData, type Person } from "./org";
 
 export interface StoredPerson extends Person {
   updatedBy?: string;
@@ -32,6 +32,7 @@ export function toPerson(id: string, d: Record<string, unknown>): StoredPerson {
     functions: cleanFunctions(d.functions),
     x: cleanCoord(d.x),
     y: cleanCoord(d.y),
+    linkChart: cleanLink(d.linkChart),
     updatedBy: typeof d.updatedBy === "string" ? d.updatedBy : undefined,
     updatedAt: (d.updatedAt as Timestamp | undefined) ?? null,
   };
@@ -48,6 +49,7 @@ export const cleanPerson = (p: Person) => ({
   functions: cleanFunctions(p.functions),
   x: cleanCoord(p.x),
   y: cleanCoord(p.y),
+  linkChart: cleanLink(p.linkChart),
 });
 
 export type Op = (b: WriteBatch) => void;
