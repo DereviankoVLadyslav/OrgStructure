@@ -325,3 +325,4 @@ fieldset.field{border:0;margin:0;padding:0}
 .back:hover{text-decoration:underline;text-underline-offset:3px}
 .switch{height:24px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);font-size:12px;text-transform:none;letter-spacing:0;max-width:220px;padding:0 4px}
 .chart-card .fn-input{flex:none;height:38px}
+.signin{display:flex;flex-direction:column;gap:12px}

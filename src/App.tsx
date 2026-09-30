@@ -33,9 +33,10 @@ export default function App() {
 }
 
 function Authed() {
-  const { user, ready, error, signIn, logout } = useAuth();
+  const auth = useAuth();
+  const { user, ready, logout } = auth;
   if (!ready) return <Gate title="Завантаження…"><p>Перевіряємо вхід.</p></Gate>;
-  if (!user) return <SignInGate onSignIn={signIn} error={error} />;
+  if (!user) return <SignInGate auth={auth} />;
   return <WithAccess user={user} onLogout={logout} />;
 }
 

@@ -39,7 +39,7 @@ export function AccessPanel({ list, myEmail, onClose, onMessage }: Props) {
 
   const add = (e: FormEvent) => {
     e.preventDefault();
-    if (!isValidEmail(email)) return onMessage("Введіть коректну адресу Gmail або Google Workspace.");
+    if (!isValidEmail(email)) return onMessage("Введіть коректну адресу пошти.");
     const v = email.trim().toLowerCase();
     run(() => setMemberLevel(v, level), `Доступ для ${v} збережено`).then(() => setEmail(""));
   };
@@ -51,13 +51,13 @@ export function AccessPanel({ list, myEmail, onClose, onMessage }: Props) {
         <button className="x" type="button" aria-label="Закрити" onClick={onClose}>×</button>
       </div>
       <p className="note">
-        Люди входять через Google. Бачити й редагувати схему можуть лише адреси з цього списку.
+        Люди входять за посиланням, яке приходить на їхню робочу пошту. Бачити й редагувати схеми можуть лише адреси з цього списку.
       </p>
 
       <form onSubmit={add}>
         <label className="field">
-          <span>Google-пошта</span>
-          <input id="access-email" type="email" placeholder="name@gmail.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <span>Робоча пошта</span>
+          <input id="access-email" type="email" placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} />
         </label>
         <label className="field">
           <span>Права</span>

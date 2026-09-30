@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import type { useAuth } from "../lib/useAuth";
 
 export function Gate({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -24,13 +25,59 @@ export function SetupGate() {
   );
 }
 
-export function SignInGate({ onSignIn, error }: { onSignIn: () => void; error: string | null }) {
+export function SignInGate({ auth }: { auth: ReturnType<typeof useAuth> }) {
+  const { link, busy, error, sendLink, finish, restart } = auth;
+  const [email, setEmail] = useState("");
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+  if (link.step === "sent")
+    return (
+      <Gate title="Перевірте пошту">
+        <p>
+          Ми надіслали посилання для входу на <code>{link.email}</code>. Відкрийте лист у цьому ж браузері й натисніть
+          «Увійти». Посилання одноразове.
+        </p>
+        <p>Лист не прийшов за кілька хвилин? Перевірте папку «Спам» або попросіть IT додати відправника до дозволених.</p>
+        <div className="copy">
+          <button className="btn" type="button" disabled={busy} onClick={() => sendLink(link.email)}>Надіслати ще раз</button>
+          <button className="btn" type="button" onClick={restart}>Інша адреса</button>
+        </div>
+        {error && <p className="err">{error}</p>}
+      </Gate>
+    );
+
+  const confirm = link.step === "confirm";
   return (
-    <Gate title="Оргструктура компанії">
-      <p>Увійдіть через Google, щоб переглядати й редагувати структуру. Доступ мають лише люди, яких додав адміністратор.</p>
-      <button className="btn primary google" type="button" onClick={onSignIn}>
-        Увійти через Google
-      </button>
+    <Gate title={confirm ? "Підтвердіть пошту" : "Оргструктура компанії"}>
+      <p>
+        {confirm
+          ? "Посилання відкрито в іншому браузері чи пристрої. Введіть ту саму адресу, на яку надсилали лист."
+          : "Увійдіть через корпоративну пошту: ми надішлемо на неї посилання для входу, пароль не потрібен. Доступ мають лише люди, яких додав адміністратор."}
+      </p>
+      <form
+        className="signin"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!valid || busy) return;
+          if (confirm) finish(email);
+          else sendLink(email);
+        }}
+      >
+        <label className="field">
+          <span>Робоча пошта</span>
+          <input
+            id="signin-email"
+            type="email"
+            autoComplete="email"
+            placeholder="name@company.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </label>
+        <button className="btn primary google" type="submit" disabled={!valid || busy}>
+          {busy ? "Зачекайте…" : confirm ? "Увійти" : "Надіслати посилання"}
+        </button>
+      </form>
       {error && <p className="err">{error}</p>}
     </Gate>
   );

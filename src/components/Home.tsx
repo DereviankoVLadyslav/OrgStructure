@@ -179,7 +179,6 @@ export function Home({ user, level, list, bootstrapped, onLogout, charts, onOpen
                         {count == null ? "…" : count < 0 ? "—" : `${count} ${plural(count, "співробітник", "співробітники", "співробітників")}`}
                       </span>
                       <span>Змінено {when(c)}</span>
-                      {c.updatedBy && <span className="chart-by">{c.updatedBy}</span>}
                     </div>
 
                     {deleting === c.id ? (
