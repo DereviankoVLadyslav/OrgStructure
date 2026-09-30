@@ -25,6 +25,8 @@ interface Props {
   onAreaChange: (a: Area) => void;
   /** A line was dragged from `managerId`'s card onto `subId`'s card. */
   onLink: (managerId: string, subId: string) => void;
+  /** A line was dragged from `managerId`'s card and dropped on empty space at `at` (canvas coordinates). */
+  onLinkToEmpty: (managerId: string, at: Pt) => void;
 }
 
 type Drag =
@@ -195,6 +197,11 @@ export function OrgCanvas(props: Props) {
       setLinkLine(null);
       setDropTarget(null);
       if (target) props.onLink(d.id, target);
+      else if (d.moved) {
+        // dropped on empty space: start creating a new subordinate right there
+        const p = worldPoint(e);
+        props.onLinkToEmpty(d.id, { x: snap(p.x - m.w / 2, m.grid), y: snap(p.y - 16, m.grid) });
+      }
       return;
     }
     if (!d.moved) {
@@ -275,7 +282,7 @@ export function OrgCanvas(props: Props) {
 
         <svg className="links" width={worldW} height={worldH} aria-hidden="true">
           {paths.map((p, i) => (
-            <path key={i} d={p.d} className={p.extra ? "extra" : undefined} />
+            <path key={i} d={p.d} />
           ))}
           {linkLine && (
             <path className="link-preview" d={`M${linkLine.from.x},${linkLine.from.y}L${linkLine.to.x},${linkLine.to.y}`} />

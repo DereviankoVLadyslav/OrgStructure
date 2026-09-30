@@ -227,7 +227,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
     setPopover(null);
   };
 
-  const openNew = (managerId: string | null, role: Role = "staff") => {
+  const openNew = (managerId: string | null, role: Role = "staff", at?: Pt) => {
     if (!canEdit) return;
     const m = managerId ? people.get(managerId) : undefined;
     if (managerId && collapsed.has(managerId)) {
@@ -238,8 +238,8 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
       });
     }
     // In a hand-arranged chart a new card gets the first free spot under its manager.
-    let spot: Pt | null = null;
-    if (manualLayout) {
+    let spot: Pt | null = at ?? null;
+    if (!spot && manualLayout) {
       const taken = [...positions.values()].map((p) => ({ ...p, w: metrics.w, h: metrics.h }));
       const mp = managerId ? positions.get(managerId) : undefined;
       spot = freeSpot(mp ? { ...mp, w: metrics.w, h: metrics.h } : null, taken, metrics);
@@ -366,10 +366,17 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
 
   const onSave = async (p: Person, isNew: boolean) => {
     try {
+      // A card placed by hand switches the chart to manual layout: pin everyone else where they are
+      // so the automatic arrangement does not shift them around the new card.
+      const pins =
+        isNew && p.x != null
+          ? [...people.values()].filter((q) => q.x == null || q.y == null).map((q) => ({ id: q.id, ...positions.get(q.id)! }))
+          : [];
       const pending = upsert(p);
       setDraft({ person: p, isNew: false }); // Firestore shows the change right away; the server confirms in the background
       say(isNew ? "Співробітника додано" : "Зміни збережено");
       await pending;
+      if (pins.length) await move(pins);
     } catch (e) {
       writeFailed(e);
     }
@@ -521,7 +528,6 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
         <span><i className="sw head" />Начальник підрозділу</span>
         <span><i className="sw deputy" />Заступник</span>
         <span><i className="sw" />Співробітник</span>
-        <span><i className="sw extra-line" />Додаткове підпорядкування</span>
         <span className="canvas-tools">
           <button
             type="button"
@@ -547,7 +553,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
                   <button type="button" className="chip" onClick={() => setConfirmArrange(true)}>Авторозміщення</button>
                 )
               )}
-              <span className="hint">Тягніть картку мишею · з Shift — разом з підлеглими · киньте на іншу картку, щоб поміняти місцями · точку справа на картці протягніть до підлеглого, щоб додати підпорядкування</span>
+              <span className="hint">Тягніть картку мишею · з Shift — разом з підлеглими · киньте на іншу картку, щоб поміняти місцями · точку справа на картці протягніть до підлеглого (або в порожнє місце, щоб створити нового)</span>
             </>
           )}
         </span>
@@ -610,6 +616,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
               onAreaSelect={openAreaPop}
               onAreaChange={saveArea}
               onLink={onLink}
+              onLinkToEmpty={(managerId, at) => openNew(managerId, "staff", at)}
             />
           )}
         </div>
