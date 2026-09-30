@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   collection,
-  deleteDoc,
   doc,
   getDocs,
   onSnapshot,
   serverTimestamp,
-  setDoc,
   writeBatch,
+  type Firestore,
   type Timestamp,
+  type WriteBatch,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { cleanArea, cleanCoord, cleanFunctions, cleanIds, isRole, type Area, type OrgData, type Person } from "./org";
@@ -18,9 +18,9 @@ export interface StoredPerson extends Person {
   updatedAt?: Timestamp | null;
 }
 
-const BATCH_LIMIT = 450; // Firestore allows 500 writes per batch
+export const BATCH_LIMIT = 450; // Firestore allows 500 writes per batch
 
-function toPerson(id: string, d: Record<string, unknown>): StoredPerson {
+export function toPerson(id: string, d: Record<string, unknown>): StoredPerson {
   return {
     id,
     name: typeof d.name === "string" ? d.name : "",
@@ -37,7 +37,7 @@ function toPerson(id: string, d: Record<string, unknown>): StoredPerson {
   };
 }
 
-const clean = (p: Person) => ({
+export const cleanPerson = (p: Person) => ({
   id: p.id,
   name: p.name,
   title: p.title,
@@ -50,6 +50,17 @@ const clean = (p: Person) => ({
   y: cleanCoord(p.y),
 });
 
+export type Op = (b: WriteBatch) => void;
+
+/** Runs any number of writes in batches of at most BATCH_LIMIT. */
+export async function runOps(firestore: Firestore, ops: Op[]) {
+  for (let i = 0; i < ops.length; i += BATCH_LIMIT) {
+    const b = writeBatch(firestore);
+    ops.slice(i, i + BATCH_LIMIT).forEach((op) => op(b));
+    await b.commit();
+  }
+}
+
 export interface Move {
   id: string;
   x: number;
@@ -57,138 +68,159 @@ export interface Move {
 }
 
 /**
- * Live, shared org chart stored in Firestore:
- *   people/{id}   — one document per person
- *   meta/company  — { name }
+ * One live, shared org chart stored in Firestore:
+ *   charts/{chartId}                — { name, compact, created…, updated… }
+ *   charts/{chartId}/people/{id}    — one document per person
+ *   charts/{chartId}/areas/{id}     — background areas
  * Every change made by anyone appears for everyone within about a second.
  */
-export function useOrg(enabled: boolean, editorEmail: string) {
+export function useOrg(chartId: string, editorEmail: string) {
   const [people, setPeople] = useState<StoredPerson[] | null>(null);
-  const [company, setCompanyName] = useState("Компанія");
+  const [company, setCompanyName] = useState("");
   const [compact, setCompactState] = useState(false);
   const [areas, setAreas] = useState<Area[]>([]);
+  const [missing, setMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!enabled || !db) return;
+    if (!db) return;
+    setPeople(null);
+    setAreas([]);
+    setMissing(false);
     const unsubPeople = onSnapshot(
-      collection(db, "people"),
+      collection(db, "charts", chartId, "people"),
       (snap) => {
         setPeople(snap.docs.map((d) => toPerson(d.id, d.data())));
         setError(null);
       },
       () => setError("Втрачено доступ до структури. Оновіть сторінку."),
     );
-    const unsubCompany = onSnapshot(
-      doc(db, "meta", "company"),
+    const unsubChart = onSnapshot(
+      doc(db, "charts", chartId),
       (snap) => {
-        setCompanyName((snap.data()?.name as string) || "Компанія");
+        if (!snap.exists() && !snap.metadata.fromCache) setMissing(true);
+        setCompanyName((snap.data()?.name as string) || "");
         setCompactState(snap.data()?.compact === true);
       },
       () => {},
     );
     const unsubAreas = onSnapshot(
-      collection(db, "areas"),
+      collection(db, "charts", chartId, "areas"),
       (snap) => setAreas(snap.docs.map((d) => cleanArea({ ...d.data(), id: d.id })).filter(Boolean) as Area[]),
       () => {},
     );
     return () => {
       unsubPeople();
-      unsubCompany();
+      unsubChart();
       unsubAreas();
     };
-  }, [enabled]);
+  }, [chartId]);
 
   const stamp = useCallback(() => ({ updatedBy: editorEmail, updatedAt: serverTimestamp() }), [editorEmail]);
 
+  const personRef = useCallback((firestore: Firestore, id: string) => doc(firestore, "charts", chartId, "people", id), [chartId]);
+  const areaRef = useCallback((firestore: Firestore, id: string) => doc(firestore, "charts", chartId, "areas", id), [chartId]);
+  /** Marks the chart as changed, so the home page shows who edited it last and when. */
+  const touch = useCallback(
+    (firestore: Firestore): Op => (b) => b.set(doc(firestore, "charts", chartId), stamp(), { merge: true }),
+    [chartId, stamp],
+  );
+
   const upsert = useCallback(
     async (p: Person) => {
-      if (!db) return;
-      await setDoc(doc(db, "people", p.id), { ...clean(p), ...stamp() });
+      const f = db;
+      if (!f) return;
+      await runOps(f, [(b) => b.set(personRef(f, p.id), { ...cleanPerson(p), ...stamp() }), touch(f)]);
     },
-    [stamp],
+    [personRef, stamp, touch],
   );
 
-  /** Removes a person; their direct reports move up to the removed person's manager. One atomic batch. */
+  /** Removes a person and saves the people whose reporting lines changed because of it. One batch. */
   const remove = useCallback(
     async (id: string, updated: Person[]) => {
-      if (!db) return;
-      const batch = writeBatch(db);
-      for (const c of updated) batch.set(doc(db, "people", c.id), { ...clean(c), ...stamp() });
-      batch.delete(doc(db, "people", id));
-      await batch.commit();
+      const f = db;
+      if (!f) return;
+      await runOps(f, [
+        ...updated.map((c): Op => (b) => b.set(personRef(f, c.id), { ...cleanPerson(c), ...stamp() })),
+        (b) => b.delete(personRef(f, id)),
+        touch(f),
+      ]);
     },
-    [stamp],
+    [personRef, stamp, touch],
   );
 
-  const setCompany = useCallback(async (name: string) => {
-    if (!db) return;
-    await setDoc(doc(db, "meta", "company"), { name }, { merge: true });
-  }, []);
+  const setCompany = useCallback(
+    async (name: string) => {
+      const f = db;
+      if (!f) return;
+      await runOps(f, [(b) => b.set(doc(f, "charts", chartId), { name, ...stamp() }, { merge: true })]);
+    },
+    [chartId, stamp],
+  );
 
   const setCompact = useCallback(
     async (value: boolean) => {
-      if (!db) return;
-      await setDoc(doc(db, "meta", "company"), { name: company, compact: value }, { merge: true });
+      const f = db;
+      if (!f) return;
+      await runOps(f, [(b) => b.set(doc(f, "charts", chartId), { compact: value, ...stamp() }, { merge: true })]);
     },
-    [company],
+    [chartId, stamp],
   );
 
   /** Saves new canvas positions for several people at once (drag, swap, auto-arrange). */
   const move = useCallback(
     async (moves: Move[]) => {
-      const firestore = db;
-      if (!firestore || !people || !moves.length) return;
+      const f = db;
+      if (!f || !people || !moves.length) return;
       const byId = new Map(people.map((p) => [p.id, p]));
-      const ops = moves
+      const ops: Op[] = moves
         .filter((m) => byId.has(m.id))
-        .map((m) => (b: ReturnType<typeof writeBatch>) =>
-          b.set(doc(firestore, "people", m.id), { ...clean({ ...byId.get(m.id)!, x: m.x, y: m.y }), ...stamp() }),
-        );
-      for (let i = 0; i < ops.length; i += BATCH_LIMIT) {
-        const b = writeBatch(firestore);
-        ops.slice(i, i + BATCH_LIMIT).forEach((op) => op(b));
-        await b.commit();
-      }
+        .map((m) => (b) => b.set(personRef(f, m.id), { ...cleanPerson({ ...byId.get(m.id)!, x: m.x, y: m.y }), ...stamp() }));
+      await runOps(f, [...ops, touch(f)]);
     },
-    [people, stamp],
+    [people, personRef, stamp, touch],
   );
 
-  const upsertArea = useCallback(async (a: Area) => {
-    if (!db) return;
-    const c = cleanArea(a)!;
-    await setDoc(doc(db, "areas", c.id), c);
-  }, []);
+  const upsertArea = useCallback(
+    async (a: Area) => {
+      const f = db;
+      if (!f) return;
+      await runOps(f, [(b) => b.set(areaRef(f, a.id), cleanArea(a)!), touch(f)]);
+    },
+    [areaRef, touch],
+  );
 
-  const removeArea = useCallback(async (id: string) => {
-    if (!db) return;
-    await deleteDoc(doc(db, "areas", id));
-  }, []);
+  const removeArea = useCallback(
+    async (id: string) => {
+      const f = db;
+      if (!f) return;
+      await runOps(f, [(b) => b.delete(areaRef(f, id)), touch(f)]);
+    },
+    [areaRef, touch],
+  );
 
   /** Replaces the whole structure (used by «Імпорт»). */
   const replaceAll = useCallback(
     async (next: OrgData) => {
-      const firestore = db;
-      if (!firestore) return;
-      const existing = await getDocs(collection(firestore, "people"));
+      const f = db;
+      if (!f) return;
+      const existing = await getDocs(collection(f, "charts", chartId, "people"));
       const keep = new Set(next.people.map((p) => p.id));
-      const ops: ((b: ReturnType<typeof writeBatch>) => void)[] = [];
+      const ops: Op[] = [];
       existing.docs.forEach((d) => {
         if (!keep.has(d.id)) ops.push((b) => b.delete(d.ref));
       });
-      next.people.forEach((p) => ops.push((b) => b.set(doc(firestore, "people", p.id), { ...clean(p), ...stamp() })));
-      const existingAreas = await getDocs(collection(firestore, "areas"));
+      next.people.forEach((p) => ops.push((b) => b.set(personRef(f, p.id), { ...cleanPerson(p), ...stamp() })));
+      const existingAreas = await getDocs(collection(f, "charts", chartId, "areas"));
       existingAreas.docs.forEach((d) => ops.push((b) => b.delete(d.ref)));
-      (next.areas ?? []).forEach((a) => ops.push((b) => b.set(doc(firestore, "areas", a.id), cleanArea(a)!)));
-      ops.push((b) => b.set(doc(firestore, "meta", "company"), { name: next.company, compact: next.compact === true }));
-      for (let i = 0; i < ops.length; i += BATCH_LIMIT) {
-        const b = writeBatch(firestore);
-        ops.slice(i, i + BATCH_LIMIT).forEach((op) => op(b));
-        await b.commit();
-      }
+      (next.areas ?? []).forEach((a) => ops.push((b) => b.set(areaRef(f, a.id), cleanArea(a)!)));
+      ops.push((b) =>
+        b.set(doc(f, "charts", chartId), { name: next.company.slice(0, 80) || "Структура", compact: next.compact === true, ...stamp() }, { merge: true }),
+      );
+      await runOps(f, ops);
     },
-    [stamp],
+    [chartId, personRef, areaRef, stamp],
   );
 
-  return { people, company, compact, areas, error, upsert, remove, setCompany, setCompact, move, upsertArea, removeArea, replaceAll };
+  return { people, company, compact, areas, missing, error, upsert, remove, setCompany, setCompact, move, upsertArea, removeArea, replaceAll };
 }

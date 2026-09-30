@@ -13,13 +13,15 @@ import { isConfigured } from "./lib/firebase";
 import { useAuth } from "./lib/useAuth";
 import { useAccess, type AccessLevel, type AccessList } from "./lib/useAccess";
 import { useOrg } from "./lib/useOrg";
+import { useCharts, type ChartInfo } from "./lib/useCharts";
+import { Home } from "./components/Home";
 
 const COLLAPSED_KEY = "org-chart.collapsed";
 const LEVEL_LABEL: Record<AccessLevel, string> = { admin: "Адміністратор", editor: "Редактор", viewer: "Перегляд" };
 
-function loadCollapsed(): Set<string> {
+function loadCollapsed(chartId: string): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]"));
+    return new Set(JSON.parse(localStorage.getItem(`${COLLAPSED_KEY}.${chartId}`) ?? "[]"));
   } catch {
     return new Set();
   }
@@ -42,10 +44,53 @@ function WithAccess({ user, onLogout }: { user: User; onLogout: () => void }) {
   if (access.status === "loading") return <Gate title="Завантаження…"><p>Перевіряємо доступ.</p></Gate>;
   if (access.status === "error") return <Gate title="Немає з'єднання"><p>{access.message}</p></Gate>;
   if (access.status === "denied") return <DeniedGate email={access.email} onLogout={onLogout} />;
-  return <Chart user={user} level={access.level} list={access.list} bootstrapped={access.bootstrapped} onLogout={onLogout} />;
+  return <Workspace user={user} level={access.level} list={access.list} bootstrapped={access.bootstrapped} onLogout={onLogout} />;
+}
+
+/** Tiny hash router: «#/» is the list of charts, «#/c/<id>» opens one chart (works on GitHub Pages). */
+function useHashRoute() {
+  const read = () => {
+    const m = window.location.hash.match(/^#\/c\/([A-Za-z0-9_-]+)/);
+    return m ? m[1] : null;
+  };
+  const [chartId, setChartId] = useState<string | null>(read);
+  useEffect(() => {
+    const on = () => setChartId(read());
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  const go = useCallback((id: string | null) => {
+    window.location.hash = id ? `#/c/${id}` : "#/";
+  }, []);
+  return [chartId, go] as const;
+}
+
+function Workspace({ user, level, list, bootstrapped, onLogout }: Omit<ChartProps, "chartId" | "charts" | "onOpenChart">) {
+  const myEmail = (user.email ?? "").toLowerCase();
+  const canEdit = level !== "viewer";
+  const charts = useCharts(myEmail, canEdit);
+  const [chartId, go] = useHashRoute();
+  if (chartId)
+    return (
+      <Chart
+        key={chartId}
+        chartId={chartId}
+        charts={charts.charts ?? []}
+        onOpenChart={go}
+        user={user}
+        level={level}
+        list={list}
+        bootstrapped={false}
+        onLogout={onLogout}
+      />
+    );
+  return <Home user={user} level={level} list={list} bootstrapped={bootstrapped} onLogout={onLogout} charts={charts} onOpen={go} />;
 }
 
 interface ChartProps {
+  chartId: string;
+  charts: ChartInfo[];
+  onOpenChart: (id: string | null) => void;
   user: User;
   level: AccessLevel;
   list: AccessList;
@@ -53,13 +98,13 @@ interface ChartProps {
   onLogout: () => void;
 }
 
-function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
+function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, onLogout }: ChartProps) {
   const myEmail = (user.email ?? "").toLowerCase();
   const canEdit = level !== "viewer";
-  const { people: rows, company, compact, areas, error, upsert, remove, setCompany, setCompact, move, upsertArea, removeArea, replaceAll } =
-    useOrg(true, myEmail);
+  const { people: rows, company, compact, areas, missing, error, upsert, remove, setCompany, setCompact, move, upsertArea, removeArea, replaceAll } =
+    useOrg(chartId, myEmail);
 
-  const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed(chartId));
   const [draft, setDraft] = useState<Draft | null>(null);
   const [side, setSide] = useState<"person" | "access" | null>(null);
   const [popover, setPopover] = useState<{ id: string; anchor: DOMRect } | null>(null);
@@ -106,11 +151,11 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
 
   useEffect(() => {
     try {
-      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsed]));
+      localStorage.setItem(`${COLLAPSED_KEY}.${chartId}`, JSON.stringify([...collapsed]));
     } catch {
       /* per-browser convenience only */
     }
-  }, [collapsed]);
+  }, [collapsed, chartId]);
 
   // Someone else deleted the person being edited
   useEffect(() => {
@@ -465,12 +510,33 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
       ? `Востаннє змінено: ${current.updatedBy}${current.updatedAt ? " · " + current.updatedAt.toDate().toLocaleString("uk-UA", { dateStyle: "short", timeStyle: "short" }) : ""}`
       : undefined;
 
+  if (missing)
+    return (
+      <Gate title="Структуру не знайдено">
+        <p>Можливо, її видалили або посилання неповне.</p>
+        <button className="btn primary" type="button" onClick={() => onOpenChart(null)}>До всіх структур</button>
+      </Gate>
+    );
+
   return (
     <>
       <header className="top">
         <div className="brand">
           <div className="eyebrow">
-            Організаційна структура
+            <button type="button" className="back" onClick={() => onOpenChart(null)}>← Усі структури</button>
+            {charts.length > 1 && (
+              <select
+                id="chart-switch"
+                className="switch"
+                aria-label="Перейти до іншої структури"
+                value={chartId}
+                onChange={(e) => onOpenChart(e.target.value)}
+              >
+                {charts.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name || "Без назви"}</option>
+                ))}
+              </select>
+            )}
             <span className="stats">
               {n} {plural(n, "співробітник", "співробітники", "співробітників")} · {departments.length}{" "}
               {plural(departments.length, "підрозділ", "підрозділи", "підрозділів")}
@@ -478,13 +544,13 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
           </div>
           <input
             id="company-name"
-            aria-label="Назва компанії"
+            aria-label="Назва структури"
             maxLength={80}
             readOnly={!canEdit}
             value={companyInput}
             onChange={(e) => setCompanyInput(e.target.value)}
             onBlur={() => {
-              const v = companyInput.trim() || "Компанія";
+              const v = companyInput.trim() || company || "Структура";
               setCompanyInput(v);
               if (v !== company) setCompany(v).catch(writeFailed);
             }}

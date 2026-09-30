@@ -93,6 +93,33 @@ service cloud.firestore {
       allow delete: if isEditor();
     }
 
+    // ---------- several charts ----------
+    function validChart() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['name', 'compact', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt'])
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+        && (!('compact' in d) || d.compact is bool)
+        && d.updatedBy == me()
+        && d.updatedAt == request.time;
+    }
+
+    match /charts/{chartId} {
+      allow read: if isViewer();
+      allow create, update: if isEditor() && validChart();
+      allow delete: if isEditor();
+
+      match /people/{id} {
+        allow read: if isViewer();
+        allow create, update: if isEditor() && validPerson(id);
+        allow delete: if isEditor();
+      }
+      match /areas/{id} {
+        allow read: if isViewer();
+        allow create, update: if isEditor() && validArea(id);
+        allow delete: if isEditor();
+      }
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
