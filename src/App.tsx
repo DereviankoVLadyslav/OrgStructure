@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import type { User } from "firebase/auth";
-import { OrgTree } from "./components/OrgTree";
+import { OrgCanvas } from "./components/OrgCanvas";
+import { AreaPopover } from "./components/AreaPopover";
 import { PersonPanel, type Draft } from "./components/PersonPanel";
 import { AccessPanel } from "./components/AccessPanel";
 import { PersonPopover } from "./components/PersonPopover";
 import { DeniedGate, Gate, SetupGate, SignInGate } from "./components/Gates";
-import { buildIndex, kids, newId, parseOrgData, plural, type Person, type Role } from "./lib/org";
+import { buildIndex, kids, newId, parseOrgData, plural, type Area, type Person, type Role } from "./lib/org";
+import { COMPACT, NORMAL, PAD, autoLayout, freeSpot, type Pt } from "./lib/layout";
+import type { Move } from "./lib/useOrg";
 import { isConfigured } from "./lib/firebase";
 import { useAuth } from "./lib/useAuth";
 import { useAccess, type AccessLevel, type AccessList } from "./lib/useAccess";
@@ -53,24 +56,36 @@ interface ChartProps {
 function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
   const myEmail = (user.email ?? "").toLowerCase();
   const canEdit = level !== "viewer";
-  const { people: rows, company, error, upsert, remove, setCompany, replaceAll } = useOrg(true, myEmail);
+  const { people: rows, company, compact, areas, error, upsert, remove, setCompany, setCompact, move, upsertArea, removeArea, replaceAll } =
+    useOrg(true, myEmail);
 
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [side, setSide] = useState<"person" | "access" | null>(null);
   const [popover, setPopover] = useState<{ id: string; anchor: DOMRect } | null>(null);
+  const [areaPop, setAreaPop] = useState<{ id: string; anchor: DOMRect } | null>(null);
+  const [confirmArrange, setConfirmArrange] = useState(false);
   const [query, setQuery] = useState("");
   const [zoom, setZoomState] = useState(1);
   const [toast, setToast] = useState<string | null>(null);
   const [companyInput, setCompanyInput] = useState(company);
 
   const canvasRef = useRef<HTMLDivElement>(null);
-  const treeRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const fitted = useRef(false);
 
   const people = useMemo(() => new Map((rows ?? []).map((p) => [p.id, p])), [rows]);
   const index = useMemo(() => buildIndex(people), [people]);
+  const metrics = compact ? COMPACT : NORMAL;
+  const auto = useMemo(() => autoLayout(index, metrics), [index, metrics]);
+  /** Saved position when there is one, otherwise the automatic tree position. */
+  const positions = useMemo(() => {
+    const out = new Map<string, Pt>();
+    for (const p of people.values()) out.set(p.id, p.x != null && p.y != null ? { x: p.x, y: p.y } : auto.get(p.id) ?? { x: PAD, y: PAD });
+    return out;
+  }, [people, auto]);
+  const manualLayout = useMemo(() => [...people.values()].some((p) => p.x != null && p.y != null), [people]);
+
   const departments = useMemo(
     () => [...new Set((rows ?? []).map((p) => p.dept).filter(Boolean))].sort((a, b) => a.localeCompare(b, "uk")),
     [rows],
@@ -109,19 +124,30 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
   /* ---------- zoom & pan ---------- */
   const setZoom = (z: number) => setZoomState(Math.min(1.6, Math.max(0.35, Math.round(z * 100) / 100)));
 
+  const bounds = useMemo(() => {
+    let w = 0;
+    let h = 0;
+    for (const p of positions.values()) {
+      w = Math.max(w, p.x + metrics.w);
+      h = Math.max(h, p.y + metrics.h);
+    }
+    for (const a of areas) {
+      w = Math.max(w, a.x + a.w);
+      h = Math.max(h, a.y + a.h);
+    }
+    return { w: w + PAD, h: h + PAD };
+  }, [positions, areas, metrics]);
+
   const fit = useCallback(() => {
     const c = canvasRef.current;
-    const t = treeRef.current;
-    if (!c || !t) return;
-    t.style.zoom = "1";
-    const z = Math.min(1, Math.max(0.45, (c.clientWidth - 8) / t.scrollWidth));
-    t.style.zoom = String(z);
-    setZoomState(z);
+    if (!c || !bounds.w) return;
+    const z = Math.min(1, Math.max(0.3, Math.min((c.clientWidth - 16) / bounds.w, (c.clientHeight - 16) / bounds.h)));
+    setZoomState(Math.round(z * 100) / 100);
     requestAnimationFrame(() => {
-      c.scrollLeft = (c.scrollWidth - c.clientWidth) / 2;
+      c.scrollLeft = 0;
       c.scrollTop = 0;
     });
-  }, []);
+  }, [bounds]);
 
   useLayoutEffect(() => {
     if (!fitted.current && rows && rows.length) {
@@ -135,7 +161,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
     if (!c) return;
     let start: { x: number; y: number; l: number; t: number } | null = null;
     const down = (e: PointerEvent) => {
-      if (e.button !== 0 || (e.target as HTMLElement).closest(".card,.mini,button,.stack,input")) return;
+      if (e.button !== 0 || (e.target as HTMLElement).closest(".card,button,input,.area-grip,.area-resize,.popover")) return;
       start = { x: e.clientX, y: e.clientY, l: c.scrollLeft, t: c.scrollTop };
       c.setPointerCapture(e.pointerId);
       c.classList.add("panning");
@@ -171,16 +197,22 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
   // The menu is anchored to a card; moving the chart would leave it floating in the wrong place.
   useEffect(() => {
     const c = canvasRef.current;
-    if (!c || !popover) return;
-    const close = () => setPopover(null);
+    if (!c || (!popover && !areaPop)) return;
+    const close = () => {
+      setPopover(null);
+      setAreaPop(null);
+    };
     c.addEventListener("scroll", close, { passive: true });
     return () => c.removeEventListener("scroll", close);
-  }, [popover]);
-  useEffect(() => setPopover(null), [zoom, collapsed, query]);
+  }, [popover, areaPop]);
+  useEffect(() => {
+    setPopover(null);
+    setAreaPop(null);
+  }, [zoom, collapsed, query, compact]);
 
   useEffect(() => {
     if (!query) return;
-    treeRef.current?.querySelector(".hit")?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+    canvasRef.current?.querySelector(".hit")?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
   }, [query]);
 
   /* ---------- editing ---------- */
@@ -188,7 +220,7 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
     const p = people.get(id);
     if (!p) return;
     setDraft({
-      person: { id: p.id, name: p.name, title: p.title, dept: p.dept, role: p.role, managerId: index.parentOf.get(id) ?? null, functions: [...p.functions] },
+      person: { id: p.id, name: p.name, title: p.title, dept: p.dept, role: p.role, managerId: index.parentOf.get(id) ?? null, functions: [...p.functions], x: p.x, y: p.y },
       isNew: false,
     });
     setSide("person");
@@ -205,7 +237,17 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
         return n;
       });
     }
-    setDraft({ person: { id: newId(), name: "", title: "", dept: m?.dept ?? "", role, managerId, functions: [] }, isNew: true });
+    // In a hand-arranged chart a new card gets the first free spot under its manager.
+    let spot: Pt | null = null;
+    if (manualLayout) {
+      const taken = [...positions.values()].map((p) => ({ ...p, w: metrics.w, h: metrics.h }));
+      const mp = managerId ? positions.get(managerId) : undefined;
+      spot = freeSpot(mp ? { ...mp, w: metrics.w, h: metrics.h } : null, taken, metrics);
+    }
+    setDraft({
+      person: { id: newId(), name: "", title: "", dept: m?.dept ?? "", role, managerId, functions: [], x: spot?.x ?? null, y: spot?.y ?? null },
+      isNew: true,
+    });
     setSide("person");
     setPopover(null);
   };
@@ -230,10 +272,76 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
     const p = people.get(id);
     if (!p) return;
     try {
-      await upsert({ id: p.id, name: p.name, title: p.title, dept: p.dept, role: p.role, managerId: p.managerId, functions: next });
+      await upsert({ ...p, functions: next });
     } catch (e) {
       writeFailed(e);
     }
+  };
+
+  /** Saves dragged positions. The first drag also pins everybody else where they are now. */
+  const onMove = async (moves: Move[]) => {
+    const moved = new Set(moves.map((m) => m.id));
+    const pin = [...people.values()]
+      .filter((p) => !moved.has(p.id) && (p.x == null || p.y == null))
+      .map((p) => ({ id: p.id, ...positions.get(p.id)! }));
+    try {
+      await move([...moves, ...pin]);
+    } catch (e) {
+      writeFailed(e);
+    }
+  };
+
+  const autoArrange = async () => {
+    setConfirmArrange(false);
+    try {
+      await move([...auto].map(([id, p]) => ({ id, ...p })));
+      say("Картки розставлено автоматично");
+      requestAnimationFrame(fit);
+    } catch (e) {
+      writeFailed(e);
+    }
+  };
+
+  const toggleCompact = async () => {
+    try {
+      await setCompact(!compact);
+    } catch (e) {
+      writeFailed(e);
+    }
+  };
+
+  /* ---------- areas ---------- */
+  const addArea = async () => {
+    const c = canvasRef.current;
+    const cx = c ? (c.scrollLeft + c.clientWidth / 2) / zoom : 400;
+    const cy = c ? (c.scrollTop + c.clientHeight / 2) / zoom : 300;
+    const a: Area = { id: "a" + newId().slice(1), label: "Нова область", x: Math.max(0, Math.round(cx - 240)), y: Math.max(0, Math.round(cy - 140)), w: 480, h: 280, shape: "rect", tone: "soft" };
+    try {
+      await upsertArea(a);
+      say("Область додано. Клікніть на її назву, щоб змінити, або тягніть за назву, щоб перемістити.");
+    } catch (e) {
+      writeFailed(e);
+    }
+  };
+  const saveArea = async (a: Area) => {
+    try {
+      await upsertArea(a);
+    } catch (e) {
+      writeFailed(e);
+    }
+  };
+  const deleteArea = async (id: string) => {
+    setAreaPop(null);
+    try {
+      await removeArea(id);
+      say("Область видалено");
+    } catch (e) {
+      writeFailed(e);
+    }
+  };
+  const openAreaPop = (id: string, el: HTMLElement) => {
+    setPopover(null);
+    setAreaPop((cur) => (cur?.id === id ? null : { id, anchor: el.getBoundingClientRect() }));
   };
 
   const onSave = async (p: Person, isNew: boolean) => {
@@ -274,7 +382,12 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
 
   /* ---------- import / export ---------- */
   const exportJson = () => {
-    const data = { company, people: (rows ?? []).map(({ id, name, title, dept, role, managerId, functions }) => ({ id, name, title, dept, role, managerId, functions })) };
+    const data = {
+      company,
+      compact,
+      people: (rows ?? []).map(({ id, name, title, dept, role, managerId, functions, x, y }) => ({ id, name, title, dept, role, managerId, functions, x, y })),
+      areas,
+    };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -379,6 +492,35 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
         <span><i className="sw head" />Начальник підрозділу</span>
         <span><i className="sw deputy" />Заступник</span>
         <span><i className="sw" />Співробітник</span>
+        <span className="canvas-tools">
+          <button
+            type="button"
+            className={"chip" + (compact ? " on" : "")}
+            aria-pressed={compact}
+            disabled={!canEdit}
+            title={canEdit ? "Маленькі картки лише з ім'ям або номером" : "Вигляд змінюють редактори"}
+            onClick={toggleCompact}
+          >
+            Компактні картки
+          </button>
+          {canEdit && (
+            <>
+              <button type="button" className="chip" onClick={addArea}>+ Область</button>
+              {confirmArrange ? (
+                <span className="confirm-inline">
+                  Розставити всі картки автоматично? Ручне розміщення буде втрачено.
+                  <button type="button" className="link danger" onClick={autoArrange}>Так</button>
+                  <button type="button" className="link" onClick={() => setConfirmArrange(false)}>Ні</button>
+                </span>
+              ) : (
+                manualLayout && (
+                  <button type="button" className="chip" onClick={() => setConfirmArrange(true)}>Авторозміщення</button>
+                )
+              )}
+              <span className="hint">Тягніть картку мишею · з Shift — разом з підлеглими · киньте на іншу картку, щоб поміняти місцями</span>
+            </>
+          )}
+        </span>
         <span className="filebar">
           <span className="user">
             {user.photoURL && <img src={user.photoURL} alt="" referrerPolicy="no-referrer" />}
@@ -397,37 +539,48 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
 
       <div className="main">
         <div className="canvas" ref={canvasRef}>
-          <div className={"tree" + (query ? " searching" : "")} ref={treeRef} style={{ zoom }}>
-            {!rows ? (
-              <div className="empty"><p>Завантаження структури…</p></div>
-            ) : n === 0 ? (
-              <div className="empty">
-                <h2>Структура порожня</h2>
-                {canEdit ? (
-                  <>
-                    <p>Почніть з керівника компанії, а потім додавайте підлеглих кнопкою «+» на картці. Або завантажте приклад і змініть його під себе.</p>
-                    <div className="copy">
-                      <button className="btn primary" type="button" onClick={() => openNew(null, "director")}>+ Додати керівника</button>
-                      <button className="btn" type="button" onClick={loadDemo}>Завантажити приклад</button>
-                    </div>
-                  </>
-                ) : (
-                  <p>Редактори ще не додали жодної людини.</p>
-                )}
-              </div>
-            ) : (
-              <OrgTree
-                index={index}
-                collapsed={collapsed}
-                selectedId={popover?.id ?? (side === "person" ? (draft?.isNew ? draft.person.managerId : draft?.person.id ?? null) : null)}
-                query={query}
-                canEdit={canEdit}
-                onSelect={openPopover}
-                onAdd={(id) => openNew(id)}
-                onToggle={toggle}
-              />
-            )}
-          </div>
+          {!rows ? (
+            <div className="empty"><p>Завантаження структури…</p></div>
+          ) : n === 0 ? (
+            <div className="empty">
+              <h2>Структура порожня</h2>
+              {canEdit ? (
+                <>
+                  <p>Почніть з керівника компанії, а потім додавайте підлеглих кнопкою «+» на картці. Або завантажте приклад і змініть його під себе.</p>
+                  <div className="copy">
+                    <button className="btn primary" type="button" onClick={() => openNew(null, "director")}>+ Додати керівника</button>
+                    <button className="btn" type="button" onClick={loadDemo}>Завантажити приклад</button>
+                  </div>
+                </>
+              ) : (
+                <p>Редактори ще не додали жодної людини.</p>
+              )}
+            </div>
+          ) : (
+            <OrgCanvas
+              people={people}
+              index={index}
+              positions={positions}
+              areas={areas}
+              collapsed={collapsed}
+              selectedId={popover?.id ?? (side === "person" ? (draft?.isNew ? draft.person.managerId : draft?.person.id ?? null) : null)}
+              selectedAreaId={areaPop?.id ?? null}
+              query={query}
+              canEdit={canEdit}
+              compact={compact}
+              scale={zoom}
+              onSelect={openPopover}
+              onAdd={(id) => openNew(id)}
+              onToggle={toggle}
+              onMove={onMove}
+              onDragStart={() => {
+                setPopover(null);
+                setAreaPop(null);
+              }}
+              onAreaSelect={openAreaPop}
+              onAreaChange={saveArea}
+            />
+          )}
         </div>
 
         {side === "person" && draft && (
@@ -471,6 +624,18 @@ function Chart({ user, level, list, bootstrapped, onLogout }: ChartProps) {
           />
         );
       })()}
+
+      {areaPop && areas.find((a) => a.id === areaPop.id) && (
+        <AreaPopover
+          key={areaPop.id}
+          area={areas.find((a) => a.id === areaPop.id)!}
+          anchor={areaPop.anchor}
+          canEdit={canEdit}
+          onChange={saveArea}
+          onDelete={() => deleteArea(areaPop.id)}
+          onClose={() => setAreaPop(null)}
+        />
+      )}
 
       {(toast || error) && <div className="toast">{toast ?? error}</div>}
     </>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   collection,
+  deleteDoc,
   doc,
   getDocs,
   onSnapshot,
@@ -10,7 +11,7 @@ import {
   type Timestamp,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import { cleanFunctions, isRole, type OrgData, type Person } from "./org";
+import { cleanArea, cleanCoord, cleanFunctions, isRole, type Area, type OrgData, type Person } from "./org";
 
 export interface StoredPerson extends Person {
   updatedBy?: string;
@@ -28,6 +29,8 @@ function toPerson(id: string, d: Record<string, unknown>): StoredPerson {
     role: isRole(d.role) ? d.role : "staff",
     managerId: typeof d.managerId === "string" ? d.managerId : null,
     functions: cleanFunctions(d.functions),
+    x: cleanCoord(d.x),
+    y: cleanCoord(d.y),
     updatedBy: typeof d.updatedBy === "string" ? d.updatedBy : undefined,
     updatedAt: (d.updatedAt as Timestamp | undefined) ?? null,
   };
@@ -41,7 +44,15 @@ const clean = (p: Person) => ({
   role: p.role,
   managerId: p.managerId,
   functions: cleanFunctions(p.functions),
+  x: cleanCoord(p.x),
+  y: cleanCoord(p.y),
 });
+
+export interface Move {
+  id: string;
+  x: number;
+  y: number;
+}
 
 /**
  * Live, shared org chart stored in Firestore:
@@ -52,6 +63,8 @@ const clean = (p: Person) => ({
 export function useOrg(enabled: boolean, editorEmail: string) {
   const [people, setPeople] = useState<StoredPerson[] | null>(null);
   const [company, setCompanyName] = useState("Компанія");
+  const [compact, setCompactState] = useState(false);
+  const [areas, setAreas] = useState<Area[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -66,12 +79,21 @@ export function useOrg(enabled: boolean, editorEmail: string) {
     );
     const unsubCompany = onSnapshot(
       doc(db, "meta", "company"),
-      (snap) => setCompanyName((snap.data()?.name as string) || "Компанія"),
+      (snap) => {
+        setCompanyName((snap.data()?.name as string) || "Компанія");
+        setCompactState(snap.data()?.compact === true);
+      },
+      () => {},
+    );
+    const unsubAreas = onSnapshot(
+      collection(db, "areas"),
+      (snap) => setAreas(snap.docs.map((d) => cleanArea({ ...d.data(), id: d.id })).filter(Boolean) as Area[]),
       () => {},
     );
     return () => {
       unsubPeople();
       unsubCompany();
+      unsubAreas();
     };
   }, [enabled]);
 
@@ -99,7 +121,46 @@ export function useOrg(enabled: boolean, editorEmail: string) {
 
   const setCompany = useCallback(async (name: string) => {
     if (!db) return;
-    await setDoc(doc(db, "meta", "company"), { name });
+    await setDoc(doc(db, "meta", "company"), { name }, { merge: true });
+  }, []);
+
+  const setCompact = useCallback(
+    async (value: boolean) => {
+      if (!db) return;
+      await setDoc(doc(db, "meta", "company"), { name: company, compact: value }, { merge: true });
+    },
+    [company],
+  );
+
+  /** Saves new canvas positions for several people at once (drag, swap, auto-arrange). */
+  const move = useCallback(
+    async (moves: Move[]) => {
+      const firestore = db;
+      if (!firestore || !people || !moves.length) return;
+      const byId = new Map(people.map((p) => [p.id, p]));
+      const ops = moves
+        .filter((m) => byId.has(m.id))
+        .map((m) => (b: ReturnType<typeof writeBatch>) =>
+          b.set(doc(firestore, "people", m.id), { ...clean({ ...byId.get(m.id)!, x: m.x, y: m.y }), ...stamp() }),
+        );
+      for (let i = 0; i < ops.length; i += BATCH_LIMIT) {
+        const b = writeBatch(firestore);
+        ops.slice(i, i + BATCH_LIMIT).forEach((op) => op(b));
+        await b.commit();
+      }
+    },
+    [people, stamp],
+  );
+
+  const upsertArea = useCallback(async (a: Area) => {
+    if (!db) return;
+    const c = cleanArea(a)!;
+    await setDoc(doc(db, "areas", c.id), c);
+  }, []);
+
+  const removeArea = useCallback(async (id: string) => {
+    if (!db) return;
+    await deleteDoc(doc(db, "areas", id));
   }, []);
 
   /** Replaces the whole structure (used by «Імпорт»). */
@@ -114,7 +175,10 @@ export function useOrg(enabled: boolean, editorEmail: string) {
         if (!keep.has(d.id)) ops.push((b) => b.delete(d.ref));
       });
       next.people.forEach((p) => ops.push((b) => b.set(doc(firestore, "people", p.id), { ...clean(p), ...stamp() })));
-      ops.push((b) => b.set(doc(firestore, "meta", "company"), { name: next.company }));
+      const existingAreas = await getDocs(collection(firestore, "areas"));
+      existingAreas.docs.forEach((d) => ops.push((b) => b.delete(d.ref)));
+      (next.areas ?? []).forEach((a) => ops.push((b) => b.set(doc(firestore, "areas", a.id), cleanArea(a)!)));
+      ops.push((b) => b.set(doc(firestore, "meta", "company"), { name: next.company, compact: next.compact === true }));
       for (let i = 0; i < ops.length; i += BATCH_LIMIT) {
         const b = writeBatch(firestore);
         ops.slice(i, i + BATCH_LIMIT).forEach((op) => op(b));
@@ -124,5 +188,5 @@ export function useOrg(enabled: boolean, editorEmail: string) {
     [stamp],
   );
 
-  return { people, company, error, upsert, remove, setCompany, replaceAll };
+  return { people, company, compact, areas, error, upsert, remove, setCompany, setCompact, move, upsertArea, removeArea, replaceAll };
 }

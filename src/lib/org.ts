@@ -9,11 +9,31 @@ export interface Person {
   managerId: string | null;
   /** Duties / responsibilities of the person, in display order. */
   functions: string[];
+  /** Position on the canvas (top-left corner). null = placed automatically. */
+  x: number | null;
+  y: number | null;
+}
+
+export type AreaShape = "rect" | "ellipse";
+export type AreaTone = "soft" | "strong";
+
+/** A labelled background zone on the canvas (e.g. «Front office») or a title banner. */
+export interface Area {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  shape: AreaShape;
+  tone: AreaTone;
 }
 
 export interface OrgData {
   company: string;
+  compact?: boolean;
   people: Person[];
+  areas?: Area[];
 }
 
 export const ROLES: Record<Role, { label: string; rank: number }> = {
@@ -132,9 +152,19 @@ export function parseOrgData(raw: unknown): OrgData {
       role: isRole(p.role) ? p.role : "staff",
       managerId: typeof p.managerId === "string" ? p.managerId : null,
       functions: cleanFunctions(p.functions),
+      x: cleanCoord(p.x),
+      y: cleanCoord(p.y),
     };
   });
-  return { company: typeof obj.company === "string" ? obj.company : "Компанія", people };
+  const areas = Array.isArray((obj as { areas?: unknown }).areas)
+    ? ((obj as { areas: unknown[] }).areas.map(cleanArea).filter(Boolean) as Area[])
+    : [];
+  return {
+    company: typeof obj.company === "string" ? obj.company : "Компанія",
+    compact: (obj as { compact?: unknown }).compact === true,
+    people,
+    areas,
+  };
 }
 
 export const MAX_FUNCTIONS = 50;
@@ -148,4 +178,27 @@ export function cleanFunctions(v: unknown): string[] {
     .map((x) => x.trim().slice(0, MAX_FUNCTION_LENGTH))
     .filter(Boolean)
     .slice(0, MAX_FUNCTIONS);
+}
+
+export const MAX_COORD = 100000;
+
+export function cleanCoord(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? Math.min(MAX_COORD, Math.max(0, Math.round(v))) : null;
+}
+
+export function cleanArea(v: unknown): Area | null {
+  if (!v || typeof v !== "object") return null;
+  const a = v as Record<string, unknown>;
+  if (typeof a.id !== "string") return null;
+  const n = (x: unknown, d: number) => (typeof x === "number" && Number.isFinite(x) ? Math.round(x) : d);
+  return {
+    id: a.id,
+    label: typeof a.label === "string" ? a.label.slice(0, 120) : "",
+    x: Math.max(0, n(a.x, 0)),
+    y: Math.max(0, n(a.y, 0)),
+    w: Math.min(20000, Math.max(40, n(a.w, 400))),
+    h: Math.min(20000, Math.max(40, n(a.h, 240))),
+    shape: a.shape === "ellipse" ? "ellipse" : "rect",
+    tone: a.tone === "strong" ? "strong" : "soft",
+  };
 }

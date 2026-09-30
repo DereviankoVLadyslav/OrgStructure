@@ -45,7 +45,8 @@ service cloud.firestore {
     match /meta/company {
       allow read: if isViewer();
       allow write: if isEditor()
-        && request.resource.data.keys().hasOnly(['name'])
+        && request.resource.data.keys().hasOnly(['name', 'compact'])
+        && (!('compact' in request.resource.data) || request.resource.data.compact is bool)
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
         && request.resource.data.name.size() <= 80;
@@ -53,7 +54,7 @@ service cloud.firestore {
 
     function validPerson(id) {
       let d = request.resource.data;
-      return d.keys().hasOnly(['id', 'name', 'title', 'dept', 'role', 'managerId', 'functions', 'updatedBy', 'updatedAt'])
+      return d.keys().hasOnly(['id', 'name', 'title', 'dept', 'role', 'managerId', 'functions', 'x', 'y', 'updatedBy', 'updatedAt'])
         && d.id == id
         && d.name is string && d.name.size() > 0 && d.name.size() <= 80
         && d.title is string && d.title.size() <= 120
@@ -61,6 +62,8 @@ service cloud.firestore {
         && d.role in ['director', 'deputy', 'head', 'staff']
         && (d.managerId == null || (d.managerId is string && d.managerId != id))
         && (!('functions' in d) || (d.functions is list && d.functions.size() <= 50))
+        && (!('x' in d) || d.x == null || (d.x is number && d.x >= 0 && d.x <= 100000))
+        && (!('y' in d) || d.y == null || (d.y is number && d.y >= 0 && d.y <= 100000))
         && d.updatedBy == me()
         && d.updatedAt == request.time;
     }
@@ -68,6 +71,24 @@ service cloud.firestore {
     match /people/{id} {
       allow read: if isViewer();
       allow create, update: if isEditor() && validPerson(id);
+      allow delete: if isEditor();
+    }
+
+    function validArea(id) {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['id', 'label', 'x', 'y', 'w', 'h', 'shape', 'tone'])
+        && d.id == id
+        && d.label is string && d.label.size() <= 120
+        && d.x is number && d.y is number && d.x >= 0 && d.y >= 0
+        && d.w is number && d.h is number
+        && d.w >= 40 && d.h >= 40 && d.w <= 20000 && d.h <= 20000
+        && d.shape in ['rect', 'ellipse']
+        && d.tone in ['soft', 'strong'];
+    }
+
+    match /areas/{id} {
+      allow read: if isViewer();
+      allow create, update: if isEditor() && validArea(id);
       allow delete: if isEditor();
     }
 
