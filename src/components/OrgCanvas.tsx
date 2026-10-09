@@ -63,6 +63,16 @@ const dcStyle = (p: Person) =>
     ...(p.color ? { "--card-bg": p.color, "--card-ink": inkFor(p.color) } : {}),
   }) as CSSProperties;
 
+/** Text grows and shrinks with a resized card (relative to the default card size). */
+function fontSizeFor(w: number | null | undefined, h: number | null | undefined, base: { w: number; h: number }) {
+  if (!w && !h) return undefined;
+  const kw = w ? w / base.w : Infinity;
+  const kh = h ? h / base.h : Infinity;
+  const k = Math.min(kw, kh);
+  if (!Number.isFinite(k)) return undefined;
+  return Math.round(14 * Math.min(4, Math.max(0.6, k)) * 10) / 10;
+}
+
 /**
  * Free-form chart: every card sits at its own x/y, lines are drawn between managers and their
  * direct reports. Editors drag cards (Shift = together with the whole branch), drop a card onto
@@ -437,6 +447,10 @@ export function OrgCanvas(props: Props) {
                 top: pos.y,
                 width: widthOf(p.id),
                 ...(sizeOverride?.id === p.id ? { height: sizeOverride.h } : p.h ? { height: p.h } : {}),
+                fontSize:
+                  sizeOverride?.id === p.id
+                    ? fontSizeFor(sizeOverride.w, sizeOverride.h, m)
+                    : fontSizeFor(p.w, p.h, m),
               }}
               role="button"
               tabIndex={0}
@@ -530,7 +544,7 @@ export function OrgCanvas(props: Props) {
                 else cardRefs.current.delete(key);
               }}
               className={["card", "embedded", q.linkChart ? "link-card" : q.role, q.color && !q.linkChart && "custom", q.h && "sized", compact && "compact", matches(q, query) && "hit"].filter(Boolean).join(" ")}
-              style={{ ...dcStyle(q), left: x, top: y, width: q.w ?? m.w, ...(q.h ? { height: q.h } : {}) }}
+              style={{ ...dcStyle(q), left: x, top: y, width: q.w ?? m.w, ...(q.h ? { height: q.h } : {}), fontSize: fontSizeFor(q.w, q.h, m) }}
               role="button"
               tabIndex={0}
               data-embedded={key}
