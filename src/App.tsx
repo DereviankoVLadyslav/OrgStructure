@@ -21,6 +21,8 @@ import { useCharts, type ChartInfo } from "./lib/useCharts";
 import { Home } from "./components/Home";
 
 const COLLAPSED_KEY = "org-chart.collapsed";
+/** Branches are no longer folded on the canvas (the fold badges were removed). */
+const NO_COLLAPSE = new Set<string>();
 const LEVEL_LABEL: Record<UserLevel, string> = { admin: "Адміністратор", editor: "Редактор", viewer: "Перегляд", guest: "Окремі структури" };
 
 function loadCollapsed(chartId: string): Set<string> {
@@ -526,10 +528,6 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
       return n;
     });
 
-  const toggleAll = () => {
-    if (collapsed.size) setCollapsed(new Set());
-    else setCollapsed(new Set((rows ?? []).filter((p) => p.role === "head" && kids(index, p.id).length).map((p) => p.id)));
-  };
 
   /* ---------- import / export ---------- */
   const exportJson = () => {
@@ -635,9 +633,6 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
             </svg>
             <input type="search" placeholder="Пошук людини чи посади" aria-label="Пошук" value={query} onChange={(e) => setQuery(e.target.value.trim())} />
           </label>
-          <button className="btn" type="button" onClick={toggleAll}>
-            {collapsed.size ? "Розгорнути все" : "Згорнути все"}
-          </button>
           <div className="zoom" role="group" aria-label="Масштаб">
             <button type="button" aria-label="Зменшити" onClick={() => setZoom(zoom - 0.1)}>−</button>
             <span>{Math.round(zoom * 100)}%</span>
@@ -735,7 +730,7 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
               index={index}
               positions={positions}
               areas={areas}
-              collapsed={collapsed}
+              collapsed={NO_COLLAPSE}
               selectedId={popover?.id ?? (side === "person" ? (draft?.isNew ? draft.person.managerId : draft?.person.id ?? null) : null)}
               selectedAreaId={areaPop?.id ?? null}
               query={query}
@@ -758,6 +753,15 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
               foldedLinks={foldedLinks}
               onToggleLink={toggleLink}
               onOpenChart={(id) => onOpenChart(id)}
+              onResize={async (id, w, h) => {
+                const p = people.get(id);
+                if (!p) return;
+                try {
+                  await upsert({ ...p, w, h });
+                } catch (e) {
+                  writeFailed(e);
+                }
+              }}
               onSelectEmbedded={(cid, id, el) => {
                 setPopover(null);
                 setEmbPop({ chartId: cid, id, anchor: el.getBoundingClientRect() });
@@ -863,6 +867,13 @@ function Chart({ chartId, charts, onOpenChart, user, level, list, bootstrapped, 
             managerName={bosses.length ? bosses.map((b) => people.get(b)?.name).join(", ") : undefined}
             reportsCount={reportsOf(p.id, people).length}
             onChangeFunctions={(next) => changeFunctions(p.id, next)}
+            onStyle={async (patch) => {
+              try {
+                await upsert({ ...p, ...patch });
+              } catch (e) {
+                writeFailed(e);
+              }
+            }}
             onEdit={() => openEdit(p.id)}
             onAddSub={() => openNew(p.id)}
             onClose={closePopover}

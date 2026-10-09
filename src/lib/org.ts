@@ -16,6 +16,11 @@ export interface Person {
   y: number | null;
   /** When set, this card is a live link to another chart (its id) instead of a person. */
   linkChart?: string | null;
+  /** Custom card fill (one of CARD_COLORS); null = default look by role. */
+  color?: string | null;
+  /** Custom card size in canvas pixels; null = default size. */
+  w?: number | null;
+  h?: number | null;
 }
 
 export type AreaShape = "rect" | "ellipse";
@@ -160,6 +165,9 @@ export function parseOrgData(raw: unknown): OrgData {
       x: cleanCoord(p.x),
       y: cleanCoord(p.y),
       linkChart: cleanLink(p.linkChart),
+      color: cleanColor(p.color),
+      w: cleanSize(p.w),
+      h: cleanSize(p.h),
     };
   });
   const areas = Array.isArray((obj as { areas?: unknown }).areas)
@@ -253,3 +261,31 @@ export function cleanLink(v: unknown): string | null {
 }
 
 export const isLink = (p: Person) => !!p.linkChart;
+
+/** Card fills an editor can pick. Text colour is chosen automatically for contrast. */
+export const CARD_COLORS = [
+  "#4ea72e", "#2f5d24", "#cfe3c3", "#efe6cf", "#e4e4de",
+  "#3d6fa8", "#d3e2f2", "#c4572f", "#f2c9c3", "#f3d97a", "#25321f",
+] as const;
+
+export function cleanColor(v: unknown): string | null {
+  return typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : null;
+}
+
+export const MIN_CARD = { w: 60, h: 32 };
+export const MAX_CARD = 2000;
+
+export function cleanSize(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? Math.min(MAX_CARD, Math.max(MIN_CARD.h, Math.round(v))) : null;
+}
+
+/** Readable text colour (dark or light) for a given fill. */
+export function inkFor(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => {
+    const x = c / 255;
+    return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+  });
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return lum > 0.4 ? "#1f2a1a" : "#ffffff";
+}

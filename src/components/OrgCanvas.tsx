@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
-import { ROLES, buildIndex, deptColor, descendantCount, descendants, kids, managersOf, plural, type Area, type OrgIndex, type Person } from "../lib/org";
+import { MAX_CARD, MIN_CARD, ROLES, buildIndex, deptColor, inkFor, descendants, managersOf, plural, type Area, type OrgIndex, type Person } from "../lib/org";
 import { autoLayout } from "../lib/layout";
 import type { LinkedChart } from "../lib/useLinked";
 import { COMPACT, NORMAL, PAD, connectorPaths, snap, type Box, type Pt } from "../lib/layout";
@@ -37,6 +37,8 @@ interface Props {
   onOpenChart: (chartId: string) => void;
   /** a card inside an embedded (linked) chart was clicked */
   onSelectEmbedded: (chartId: string, personId: string, el: HTMLElement) => void;
+  /** a card was resized by dragging its corner */
+  onResize: (id: string, w: number, h: number) => void;
 }
 
 interface Embedded {
@@ -52,9 +54,14 @@ interface Embedded {
 type Drag =
   | { kind: "card"; id: string; ids: string[]; start: Pt; origin: Map<string, Pt>; moved: boolean; el: HTMLElement }
   | { kind: "area"; id: string; start: Pt; origin: Area; moved: boolean; el: HTMLElement; mode: "move" | "resize" }
-  | { kind: "link"; id: string; start: Pt; moved: boolean };
+  | { kind: "link"; id: string; start: Pt; moved: boolean }
+  | { kind: "resize"; id: string; start: Pt; origin: { w: number; h: number }; moved: boolean };
 
-const dcStyle = (p: Person) => ({ "--dc": deptColor(p.dept) }) as CSSProperties;
+const dcStyle = (p: Person) =>
+  ({
+    "--dc": deptColor(p.dept),
+    ...(p.color ? { "--card-bg": p.color, "--card-ink": inkFor(p.color) } : {}),
+  }) as CSSProperties;
 
 /**
  * Free-form chart: every card sits at its own x/y, lines are drawn between managers and their
@@ -70,6 +77,7 @@ export function OrgCanvas(props: Props) {
   const [areaOverride, setAreaOverride] = useState<Area | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [linkLine, setLinkLine] = useState<{ from: Pt; to: Pt } | null>(null);
+  const [sizeOverride, setSizeOverride] = useState<{ id: string; w: number; h: number } | null>(null);
   const drag = useRef<Drag | null>(null);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const worldRef = useRef<HTMLDivElement>(null);
@@ -85,7 +93,13 @@ export function OrgCanvas(props: Props) {
   const visible = useMemo(() => [...people.values()].filter((p) => !hidden.has(p.id)), [people, hidden]);
 
   const posOf = (id: string): Pt => override?.get(id) ?? positions.get(id) ?? { x: PAD, y: PAD };
-  const boxOf = (id: string): Box => ({ ...posOf(id), w: m.w, h: heights.get(id) ?? m.h });
+  /** Card width: being resized → saved custom width → default for the current view. */
+  const widthOf = (id: string) => (sizeOverride?.id === id ? sizeOverride.w : people.get(id)?.w ?? m.w);
+  const boxOf = (id: string): Box => ({
+    ...posOf(id),
+    w: widthOf(id),
+    h: sizeOverride?.id === id ? sizeOverride.h : heights.get(id) ?? people.get(id)?.h ?? m.h,
+  });
 
   // Measure real card heights so lines start and end exactly at the card edges.
   useLayoutEffect(() => {
@@ -119,7 +133,7 @@ export function OrgCanvas(props: Props) {
       const dx = Math.round(lb.x + lb.w / 2 - (maxX - minX) / 2 - minX);
       const dy = Math.round(lb.y + lb.h + 72 - minY);
       const cards = raw.map(({ q, p }) => ({ key: `${card.id}:${q.id}`, person: q as Person, x: p.x + dx, y: p.y + dy }));
-      const boxes = new Map(cards.map((c) => [c.person.id, { x: c.x, y: c.y, w: m.w, h: heights.get(c.key) ?? m.h }]));
+      const boxes = new Map(cards.map((c) => [c.person.id, { x: c.x, y: c.y, w: c.person.w ?? m.w, h: heights.get(c.key) ?? c.person.h ?? m.h }]));
       const all = [...boxes.values()];
       const fx = Math.min(...all.map((b) => b.x)) - 20;
       const fy = Math.min(...all.map((b) => b.y)) - 34;
@@ -132,7 +146,7 @@ export function OrgCanvas(props: Props) {
       out.push({ cardId: card.id, chartId, name: data.name, frame, cards, boxes, people: map });
     }
     return out;
-  }, [visible, props.linked, props.foldedLinks, positions, override, heights, compact]);
+  }, [visible, props.linked, props.foldedLinks, positions, override, heights, compact, sizeOverride, people]);
 
   const embeddedPaths = useMemo(() => {
     const out: string[] = [];
@@ -166,7 +180,7 @@ export function OrgCanvas(props: Props) {
     for (const [b, ch] of main) for (const d of connectorPaths(boxOf(b), ch.map(boxOf))) out.push({ d, extra: false });
     for (const [b, ch] of extra) for (const c of ch) for (const d of connectorPaths(boxOf(b), [boxOf(c)], 34)) out.push({ d, extra: true });
     return out;
-  }, [visible, people, hidden, collapsed, query, positions, override, heights, compact]);
+  }, [visible, people, hidden, collapsed, query, positions, override, heights, compact, sizeOverride]);
 
   // World size: everything plus room to drag further right/down.
   const allAreas = areas.map((a) => (areaOverride && a.id === areaOverride.id ? areaOverride : a));
@@ -204,6 +218,14 @@ export function OrgCanvas(props: Props) {
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
+  const onResizeDown = (e: RPointerEvent<HTMLElement>, id: string) => {
+    if (e.button !== 0 || !canEdit) return;
+    e.stopPropagation();
+    const b = boxOf(id);
+    drag.current = { kind: "resize", id, start: toWorld(e), origin: { w: b.w, h: b.h }, moved: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
   const onLinkDown = (e: RPointerEvent<HTMLElement>, id: string) => {
     if (e.button !== 0 || !canEdit) return;
     e.stopPropagation();
@@ -226,6 +248,13 @@ export function OrgCanvas(props: Props) {
   const onPointerMove = (e: RPointerEvent) => {
     const d = drag.current;
     if (!d) return;
+    if (d.kind === "resize") {
+      const w = toWorld(e);
+      d.moved = true;
+      const clamp = (v: number, min: number) => Math.min(MAX_CARD, Math.max(min, snap(v, m.grid)));
+      setSizeOverride({ id: d.id, w: clamp(d.origin.w + w.x - d.start.x, MIN_CARD.w), h: clamp(d.origin.h + w.y - d.start.y, MIN_CARD.h) });
+      return;
+    }
     if (d.kind === "link") {
       d.moved = true;
       setLinkLine({ from: d.start, to: worldPoint(e) });
@@ -265,6 +294,11 @@ export function OrgCanvas(props: Props) {
     const d = drag.current;
     drag.current = null;
     if (!d) return;
+    if (d.kind === "resize") {
+      if (d.moved && sizeOverride) props.onResize(d.id, sizeOverride.w, sizeOverride.h);
+      window.setTimeout(() => setSizeOverride(null), 400);
+      return;
+    }
     if (d.kind === "link") {
       const target = cardUnder(e, d.id);
       setLinkLine(null);
@@ -375,12 +409,12 @@ export function OrgCanvas(props: Props) {
 
         {visible.map((p) => {
           const pos = posOf(p.id);
-          const children = kids(index, p.id);
-          const isCollapsed = collapsed.has(p.id) && !query;
           const dragging = override?.has(p.id);
           const cls = [
             "card",
             p.linkChart ? "link-card" : p.role,
+            p.color && !p.linkChart && "custom",
+            (p.h || sizeOverride?.id === p.id) && "sized",
             compact && "compact",
             p.id === selectedId && "selected",
             matches(p, query) && "hit",
@@ -397,7 +431,13 @@ export function OrgCanvas(props: Props) {
                 else cardRefs.current.delete(p.id);
               }}
               className={cls}
-              style={{ ...dcStyle(p), left: pos.x, top: pos.y, width: m.w }}
+              style={{
+                ...dcStyle(p),
+                left: pos.x,
+                top: pos.y,
+                width: widthOf(p.id),
+                ...(sizeOverride?.id === p.id ? { height: sizeOverride.h } : p.h ? { height: p.h } : {}),
+              }}
               role="button"
               tabIndex={0}
               data-person={p.id}
@@ -468,18 +508,13 @@ export function OrgCanvas(props: Props) {
                   onPointerDown={(e) => onLinkDown(e, p.id)}
                 />
               )}
-              {children.length > 0 && (
-                <button
-                  className="fold"
-                  type="button"
-                  aria-label={isCollapsed ? "Розгорнути" : "Згорнути"}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    props.onToggle(p.id);
-                  }}
-                >
-                  {isCollapsed ? "+" : "−"} {descendantCount(index, p.id)}
-                </button>
+              {canEdit && (
+                <span
+                  className="card-resize"
+                  title="Потягніть, щоб змінити розмір картки"
+                  aria-hidden="true"
+                  onPointerDown={(e) => onResizeDown(e, p.id)}
+                />
               )}
             </div>
           );
@@ -494,8 +529,8 @@ export function OrgCanvas(props: Props) {
                 if (el) cardRefs.current.set(key, el);
                 else cardRefs.current.delete(key);
               }}
-              className={["card", "embedded", q.linkChart ? "link-card" : q.role, compact && "compact", matches(q, query) && "hit"].filter(Boolean).join(" ")}
-              style={{ ...dcStyle(q), left: x, top: y, width: m.w }}
+              className={["card", "embedded", q.linkChart ? "link-card" : q.role, q.color && !q.linkChart && "custom", q.h && "sized", compact && "compact", matches(q, query) && "hit"].filter(Boolean).join(" ")}
+              style={{ ...dcStyle(q), left: x, top: y, width: q.w ?? m.w, ...(q.h ? { height: q.h } : {}) }}
               role="button"
               tabIndex={0}
               data-embedded={key}
